@@ -1,5 +1,4 @@
 {
-  "buildCommand": "prisma generate && prisma db push && next build",
   "framework": "nextjs",
   "regions": ["bom1"]
 }

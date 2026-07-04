@@ -10,39 +10,36 @@ type OwnedModel =
   | "saving"
   | "income";
 
-type ModelDelegate = {
-  updateMany: (args: {
-    where: { id: string; userId: string };
-    data: Record<string, unknown>;
-  }) => Promise<{ count: number }>;
-  findUnique: (args: { where: { id: string } }) => Promise<unknown>;
+type FindFirstDelegate = {
+  findFirst: (args: { where: { id: string; userId: string } }) => Promise<unknown>;
+};
+
+type UpdateDelegate = {
+  update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
+};
+
+type DeleteManyDelegate = {
   deleteMany: (args: { where: { id: string; userId: string } }) => Promise<{ count: number }>;
 };
 
-function getDelegate(model: OwnedModel): ModelDelegate {
-  return prisma[model] as unknown as ModelDelegate;
-}
-
-/** Update a record scoped to userId (Prisma update only accepts @id/@@unique in where). */
+/** Verify ownership, then update by primary key (Prisma update requires unique id only). */
 export async function updateForUser(
   model: OwnedModel,
   userId: string,
   id: string,
   data: Record<string, unknown>
 ) {
-  const delegate = getDelegate(model);
-  const result = await delegate.updateMany({
-    where: { id, userId },
-    data,
-  });
+  const finder = prisma[model] as unknown as FindFirstDelegate;
+  const existing = await finder.findFirst({ where: { id, userId } });
+  if (!existing) return null;
 
-  if (result.count === 0) return null;
-  return delegate.findUnique({ where: { id } });
+  const updater = prisma[model] as unknown as UpdateDelegate;
+  return updater.update({ where: { id }, data });
 }
 
 /** Delete a record scoped to userId. */
 export async function deleteForUser(model: OwnedModel, userId: string, id: string) {
-  const result = await getDelegate(model).deleteMany({
+  const result = await (prisma[model] as unknown as DeleteManyDelegate).deleteMany({
     where: { id, userId },
   });
   return result.count > 0;

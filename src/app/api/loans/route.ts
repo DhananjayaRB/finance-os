@@ -66,11 +66,12 @@ export async function PUT(request: NextRequest) {
       ...(status !== undefined && { status }),
     });
 
-    if (!loan) return jsonError("Loan not found", 404);
+    if (!loan) return jsonError("Loan not found. Log out and log back in if you recently re-seeded the database.", 404);
     return jsonOk(loan);
   } catch (err) {
     console.error("PUT /api/loans:", err);
-    return jsonError("Failed to save loan", 500);
+    const message = err instanceof Error ? err.message : "Failed to save loan";
+    return jsonError(message.includes("Record") ? "Loan not found — try logging out and back in" : "Failed to save loan", 500);
   }
 }
 

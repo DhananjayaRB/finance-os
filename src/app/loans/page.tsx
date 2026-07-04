@@ -92,7 +92,7 @@ export default function LoansPage() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(err.error || "Failed to save loan");
+      alert(err.error || `Failed to save loan (${res.status})`);
       return false;
     }
     loadLoans();

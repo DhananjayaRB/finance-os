@@ -25,16 +25,16 @@ interface LoanEditSheetProps {
   onSave: (data: LoanFormData) => Promise<boolean>;
 }
 
-function buildForm(loan: LoanFormData | null): LoanFormData {
+function buildForm(loan: LoanFormData): LoanFormData {
   return {
-    id: loan?.id,
-    name: loan?.name ?? "",
-    outstanding: Number(loan?.outstanding) || 0,
-    emiAmount: Number(loan?.emiAmount) || 0,
-    interestRate: Number(loan?.interestRate) || 12,
-    emiDate: Number(loan?.emiDate) || 5,
-    pendingEmi: Number(loan?.pendingEmi) || 12,
-    loanType: loan?.loanType ?? "PERSONAL",
+    id: loan.id,
+    name: loan.name ?? "",
+    outstanding: Number(loan.outstanding) || 0,
+    emiAmount: Number(loan.emiAmount) || 0,
+    interestRate: Number(loan.interestRate) || 12,
+    emiDate: Number(loan.emiDate) || 5,
+    pendingEmi: Number(loan.pendingEmi) || 12,
+    loanType: loan.loanType ?? "PERSONAL",
   };
 }
 
@@ -43,7 +43,7 @@ function LoanEditForm({
   onClose,
   onSave,
 }: {
-  loan: LoanFormData | null;
+  loan: LoanFormData;
   onClose: () => void;
   onSave: (data: LoanFormData) => Promise<boolean>;
 }) {
@@ -67,7 +67,7 @@ function LoanEditForm({
     setSaving(true);
     try {
       const payload: LoanFormData = {
-        id: loan?.id,
+        id: form.id,
         name: form.name.trim(),
         outstanding: parseFloat(String(form.outstanding)) || 0,
         emiAmount: parseFloat(String(form.emiAmount)) || 0,
@@ -78,6 +78,10 @@ function LoanEditForm({
       };
       if (!payload.name) {
         setError("Loan name is required");
+        return;
+      }
+      if (loan.id && !payload.id) {
+        setError("Missing loan ID — please close and try again");
         return;
       }
       const ok = await onSave(payload);
@@ -99,7 +103,7 @@ function LoanEditForm({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold">{loan?.id ? "Edit Loan" : "Add Loan"}</h2>
+          <h2 className="text-lg font-bold">{loan.id ? "Edit Loan" : "Add Loan"}</h2>
           <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800">
             <X className="h-5 w-5" />
           </button>
@@ -171,11 +175,11 @@ function LoanEditForm({
 }
 
 export function LoanEditSheet({ open, loan, onClose, onSave }: LoanEditSheetProps) {
-  if (!open) return null;
+  if (!open || !loan) return null;
 
   return (
     <LoanEditForm
-      key={loan?.id ?? "new"}
+      key={loan.id ?? "new"}
       loan={loan}
       onClose={onClose}
       onSave={onSave}
