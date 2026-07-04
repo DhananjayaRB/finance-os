@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Class-based dark mode (next-themes adds .dark on <html>) */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #fafafa;
   --foreground: #18181b;
@@ -8,6 +11,7 @@
   --card: #ffffff;
   --border: #e4e4e7;
   --muted: #71717a;
+  color-scheme: light;
 }
 
 .dark {
@@ -16,6 +20,7 @@
   --card: #18181b;
   --border: #27272a;
   --muted: #a1a1aa;
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -29,6 +34,10 @@
   --font-mono: var(--font-geist-mono);
 }
 
+html {
+  background: var(--background);
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -40,11 +49,13 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* Scrollbar */
 ::-webkit-scrollbar {
   width: 4px;
 }
 ::-webkit-scrollbar-thumb {
   background: #d4d4d8;
   border-radius: 4px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #52525b;
 }

@@ -39,11 +39,11 @@ interface DashboardProps {
       budgetHealth: number;
       totalOutstanding: number;
     };
-    upcomingEmi?: { name: string; emiAmount: unknown; emiDate: number } | null;
+    upcomingEmi?: { name: string; emiAmount: number; emiDate: number } | null;
     expenseByClass: Record<string, number>;
     expenseByCategory: { name: string; value: number }[];
-    goals: { name: string; targetAmount: unknown; currentAmount: unknown }[];
-    notifications: { title: string; message: string }[];
+    goals: { name: string; targetAmount: number; currentAmount: number }[];
+    notifications: { title: string; message: string; type?: string }[];
   };
 }
 

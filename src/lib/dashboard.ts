@@ -89,9 +89,8 @@ export async function getDashboardData(userId: string) {
   );
 
   return {
-    user,
     summary: {
-      todayBalance: bankBalance + cashInHand - todayExpenseTotal,
+      todayBalance: bankBalance + cashInHand,
       income: totalIncome,
       expenses: totalExpenses,
       loans: totalEmi,
@@ -105,18 +104,28 @@ export async function getDashboardData(userId: string) {
       subscriptionTotal,
       budgetHealth,
     },
-    upcomingEmi,
-    loans,
-    goals,
-    notifications,
-    budget,
+    upcomingEmi: upcomingEmi
+      ? {
+          name: upcomingEmi.name,
+          emiAmount: decimalToNumber(upcomingEmi.emiAmount),
+          emiDate: upcomingEmi.emiDate,
+        }
+      : null,
+    goals: goals.map((g) => ({
+      name: g.name,
+      targetAmount: decimalToNumber(g.targetAmount),
+      currentAmount: decimalToNumber(g.currentAmount),
+    })),
+    notifications: notifications.map((n) => ({
+      title: n.title,
+      message: n.message,
+      type: n.type,
+    })),
     expenseByClass,
     expenseByCategory: Object.entries(expenseByCategory)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 6),
-    cashBoxes,
-    accounts,
   };
 }
 

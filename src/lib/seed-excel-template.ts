@@ -111,6 +111,29 @@ export async function seedExcelTemplate(userId: string, month: number, year: num
     }
   }
 
+  // Insurance
+  for (const ins of t.insurances) {
+    const existing = await prisma.insurance.findFirst({
+      where: { userId, name: ins.name },
+    });
+    const data = {
+      provider: ins.provider,
+      insuranceType: ins.insuranceType,
+      premium: ins.premium,
+      coverageAmount: ins.coverageAmount,
+      cycle: ins.cycle,
+      renewalDay: ins.renewalDay,
+      payableAmount: ins.payableAmount,
+      paymentStatus: (ins.payableAmount > 0 ? "PENDING" : "PAID") as "PAID" | "PENDING",
+      isActive: true,
+    };
+    if (existing) {
+      await prisma.insurance.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.insurance.create({ data: { userId, name: ins.name, ...data } });
+    }
+  }
+
   // Budget
   await prisma.budget.upsert({
     where: { userId_year_month: { userId, year, month } },

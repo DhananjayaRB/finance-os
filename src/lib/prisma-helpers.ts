@@ -8,7 +8,9 @@ type OwnedModel =
   | "expense"
   | "fixedExpense"
   | "saving"
-  | "income";
+  | "income"
+  | "insurance"
+  | "savingEntry";
 
 type FindFirstDelegate = {
   findFirst: (args: { where: { id: string; userId: string } }) => Promise<unknown>;

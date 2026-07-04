@@ -2,6 +2,7 @@ import prisma from "@/lib/db";
 import { updateForUser } from "@/lib/prisma-helpers";
 import { decimalToNumber, formatCurrency } from "@/lib/utils";
 import { computePaymentStatus, isBeforeSalary, getStatusMeta } from "@/lib/payment-status";
+import { insuranceMonthlyAmount } from "@/lib/account-ledger";
 import type { PaymentStatus } from "@/generated/prisma/client";
 
 export interface ExcelPlanItem {
@@ -19,6 +20,7 @@ export interface ExcelPlanItem {
   beforeSalary: boolean;
   loanType?: string;
   incomeType?: string;
+  insuranceType?: string;
   category?: string;
 }
 
@@ -42,6 +44,20 @@ export interface ExcelMonthlyPlan {
   savings: ExcelPlanItem[];
   monthlyFixedExpenses: ExcelPlanItem[];
   subscriptions: ExcelPlanItem[];
+  insurances: ExcelPlanItem[];
+  actualSavings: {
+    total: number;
+    entries: { id: string; name: string; type: string; amount: number; date: string }[];
+    byType: { type: string; total: number }[];
+  };
+  otherSpend: {
+    total: number;
+    need: number;
+    want: number;
+    luxury: number;
+    savings: number;
+    items: ExcelPlanItem[];
+  };
 
   totals: {
     loanEmi: number;
@@ -51,11 +67,34 @@ export interface ExcelMonthlyPlan {
     homePayable: number;
     savingsTotal: number;
     savingsPayable: number;
+    fixedTotal: number;
+    fixedPayable: number;
+    subscriptionTotal: number;
+    subscriptionPayable: number;
+    insuranceTotal: number;
+    insurancePayable: number;
+    otherSpendTotal: number;
     allPayable: number;
     totalRequired: number;
     balance: number;
-    beforeSalary: { loan: number; home: number; savings: number; total: number };
-    afterSalary: { loan: number; home: number; savings: number; total: number };
+    beforeSalary: {
+      loan: number;
+      home: number;
+      savings: number;
+      fixed: number;
+      subscriptions: number;
+      insurance: number;
+      total: number;
+    };
+    afterSalary: {
+      loan: number;
+      home: number;
+      savings: number;
+      fixed: number;
+      subscriptions: number;
+      insurance: number;
+      total: number;
+    };
   };
 
   insights: { type: string; title: string; message: string; action?: string }[];
@@ -190,6 +229,47 @@ function mapSaving(
   };
 }
 
+function mapInsurance(
+  ins: {
+    id: string;
+    name: string;
+    premium: unknown;
+    payableAmount: unknown;
+    paymentStatus: PaymentStatus;
+    renewalDay: number | null;
+    insuranceType: string;
+    cycle: string;
+  },
+  salaryDay: number,
+  currentDay: number
+): ExcelPlanItem {
+  const amount = insuranceMonthlyAmount(
+    decimalToNumber(ins.premium as string | number),
+    ins.cycle
+  );
+  const payable = decimalToNumber(ins.payableAmount as string | number);
+  const paymentStatus = computePaymentStatus({
+    amount,
+    payable,
+    dueDay: ins.renewalDay,
+    currentDay,
+  });
+  const meta = getStatusMeta(paymentStatus);
+
+  return {
+    id: ins.id,
+    name: ins.name,
+    amount,
+    payable,
+    paymentStatus,
+    statusLabel: meta.label,
+    statusColor: meta.color,
+    beforeSalary: ins.renewalDay ? isBeforeSalary(ins.renewalDay, salaryDay) : false,
+    emiDate: ins.renewalDay ?? undefined,
+    insuranceType: ins.insuranceType,
+  };
+}
+
 export async function getExcelMonthlyPlan(
   userId: string,
   month: number,
@@ -203,7 +283,7 @@ export async function getExcelMonthlyPlan(
   const user = await prisma.user.findUnique({ where: { id: userId } });
   const salaryDay = user?.salaryDay ?? 7;
 
-  const [loans, homeExpenses, monthlyFixed, savings, incomes, subscriptions, budget] =
+  const [loans, homeExpenses, monthlyFixed, savings, savingEntries, incomes, subscriptions, insurances, expenses, budget] =
     await Promise.all([
       prisma.loan.findMany({
         where: { userId, status: { not: "CLOSED" } },
@@ -218,8 +298,18 @@ export async function getExcelMonthlyPlan(
         orderBy: { name: "asc" },
       }),
       prisma.saving.findMany({ where: { userId } }),
+      prisma.savingEntry.findMany({
+        where: { userId, month, year },
+        orderBy: { date: "desc" },
+      }),
       prisma.income.findMany({ where: { userId, month, year }, orderBy: { source: "asc" } }),
       prisma.subscription.findMany({ where: { userId, isActive: true } }),
+      prisma.insurance.findMany({ where: { userId, isActive: true } }),
+      prisma.expense.findMany({
+        where: { userId, month, year },
+        include: { category: true },
+        orderBy: { date: "desc" },
+      }),
       prisma.budget.findUnique({ where: { userId_year_month: { userId, year, month } } }),
     ]);
 
@@ -266,6 +356,36 @@ export async function getExcelMonthlyPlan(
     };
   });
 
+  const insuranceItems = insurances.map((ins) => mapInsurance(ins, salaryDay, currentDay));
+
+  const actualSavingsTotal = savingEntries.reduce((s, e) => s + decimalToNumber(e.amount), 0);
+  const actualByTypeMap: Record<string, number> = {};
+  for (const e of savingEntries) {
+    actualByTypeMap[e.type] = (actualByTypeMap[e.type] || 0) + decimalToNumber(e.amount);
+  }
+  const actualSavingsByType = Object.entries(actualByTypeMap)
+    .map(([type, total]) => ({ type, total }))
+    .sort((a, b) => b.total - a.total);
+
+  const otherSpendByClass = { need: 0, want: 0, luxury: 0, savings: 0 };
+  for (const exp of expenses) {
+    const amt = decimalToNumber(exp.amount);
+    const cls = exp.classification.toLowerCase() as keyof typeof otherSpendByClass;
+    if (cls in otherSpendByClass) otherSpendByClass[cls] += amt;
+  }
+  const otherSpendTotal = Object.values(otherSpendByClass).reduce((s, v) => s + v, 0);
+  const otherSpendItems: ExcelPlanItem[] = expenses.slice(0, 20).map((exp) => ({
+    id: exp.id,
+    name: exp.merchant || exp.category?.name || "Expense",
+    amount: decimalToNumber(exp.amount),
+    payable: decimalToNumber(exp.amount),
+    paymentStatus: "PAID" as PaymentStatus,
+    statusLabel: exp.classification,
+    statusColor: "bg-zinc-100 text-zinc-700",
+    beforeSalary: exp.date.getDate() < salaryDay,
+    category: exp.classification,
+  }));
+
   const loanEmi = loanItems.reduce((s, l) => s + l.amount, 0);
   const loanPayable = loanItems.reduce((s, l) => s + l.payable, 0);
   const loanOutstanding = loanItems.reduce((s, l) => s + (l.outstanding ?? 0), 0);
@@ -273,6 +393,12 @@ export async function getExcelMonthlyPlan(
   const homePayable = homeItems.reduce((s, h) => s + h.payable, 0);
   const savingsTotal = savingItems.reduce((s, sv) => s + sv.amount, 0);
   const savingsPayable = savingItems.reduce((s, sv) => s + sv.payable, 0);
+  const fixedTotal = fixedItems.reduce((s, f) => s + f.amount, 0);
+  const fixedPayable = fixedItems.reduce((s, f) => s + f.payable, 0);
+  const subscriptionTotal = subItems.reduce((s, sub) => s + sub.amount, 0);
+  const subscriptionPayable = subItems.reduce((s, sub) => s + sub.payable, 0);
+  const insuranceTotal = insuranceItems.reduce((s, ins) => s + ins.amount, 0);
+  const insurancePayable = insuranceItems.reduce((s, ins) => s + ins.payable, 0);
 
   const planIncome = decimalToNumber(budget?.totalIncome ?? 135000);
   const breakdownTotal = incomeSources.reduce((s, i) => s + i.amount, 0);
@@ -280,25 +406,37 @@ export async function getExcelMonthlyPlan(
     .filter((i) => i.incomeType !== "SALARY")
     .reduce((s, i) => s + i.amount, 0);
 
-  const totalRequired = loanEmi + homeTotal + savingsTotal;
-  const allPayable = loanPayable + homePayable + savingsPayable;
-  const balance = planIncome - totalRequired;
+  const totalRequired =
+    loanEmi + homeTotal + savingsTotal + fixedTotal + subscriptionTotal + insuranceTotal;
+  const allPayable =
+    loanPayable + homePayable + savingsPayable + fixedPayable + subscriptionPayable + insurancePayable;
+  const balance = planIncome - totalRequired - otherSpendTotal;
 
   const beforeSalary = {
     loan: loanItems.filter((l) => l.beforeSalary).reduce((s, l) => s + l.payable, 0),
     home: homeItems.filter((h) => h.beforeSalary).reduce((s, h) => s + h.payable, 0),
     savings: savingItems.filter((s) => s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
+    fixed: fixedItems.filter((f) => f.beforeSalary).reduce((s, f) => s + f.payable, 0),
+    subscriptions: subItems.filter((s) => s.beforeSalary).reduce((s, sub) => s + sub.payable, 0),
+    insurance: insuranceItems.filter((i) => i.beforeSalary).reduce((s, ins) => s + ins.payable, 0),
     total: 0,
   };
-  beforeSalary.total = beforeSalary.loan + beforeSalary.home + beforeSalary.savings;
+  beforeSalary.total =
+    beforeSalary.loan + beforeSalary.home + beforeSalary.savings +
+    beforeSalary.fixed + beforeSalary.subscriptions + beforeSalary.insurance;
 
   const afterSalary = {
     loan: loanItems.filter((l) => !l.beforeSalary).reduce((s, l) => s + l.payable, 0),
     home: homeItems.filter((h) => !h.beforeSalary).reduce((s, h) => s + h.payable, 0),
     savings: savingItems.filter((s) => !s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
+    fixed: fixedItems.filter((f) => !f.beforeSalary).reduce((s, f) => s + f.payable, 0),
+    subscriptions: subItems.filter((s) => !s.beforeSalary).reduce((s, sub) => s + sub.payable, 0),
+    insurance: insuranceItems.filter((i) => !i.beforeSalary).reduce((s, ins) => s + ins.payable, 0),
     total: 0,
   };
-  afterSalary.total = afterSalary.loan + afterSalary.home + afterSalary.savings;
+  afterSalary.total =
+    afterSalary.loan + afterSalary.home + afterSalary.savings +
+    afterSalary.fixed + afterSalary.subscriptions + afterSalary.insurance;
 
   const insights = generateInsights({
     balance,
@@ -329,6 +467,26 @@ export async function getExcelMonthlyPlan(
     savings: savingItems,
     monthlyFixedExpenses: fixedItems,
     subscriptions: subItems,
+    insurances: insuranceItems,
+    actualSavings: {
+      total: actualSavingsTotal,
+      entries: savingEntries.map((e) => ({
+        id: e.id,
+        name: e.name,
+        type: e.type,
+        amount: decimalToNumber(e.amount),
+        date: e.date.toISOString(),
+      })),
+      byType: actualSavingsByType,
+    },
+    otherSpend: {
+      total: otherSpendTotal,
+      need: otherSpendByClass.need,
+      want: otherSpendByClass.want,
+      luxury: otherSpendByClass.luxury,
+      savings: otherSpendByClass.savings,
+      items: otherSpendItems,
+    },
     totals: {
       loanEmi,
       loanOutstanding,
@@ -337,6 +495,13 @@ export async function getExcelMonthlyPlan(
       homePayable,
       savingsTotal,
       savingsPayable,
+      fixedTotal,
+      fixedPayable,
+      subscriptionTotal,
+      subscriptionPayable,
+      insuranceTotal,
+      insurancePayable,
+      otherSpendTotal,
       allPayable,
       totalRequired,
       balance,
@@ -413,7 +578,7 @@ function generateInsights(params: {
 
 export async function markItemPaid(
   userId: string,
-  type: "loan" | "home" | "saving",
+  type: "loan" | "home" | "saving" | "insurance",
   id: string
 ) {
   if (type === "loan") {
@@ -421,6 +586,9 @@ export async function markItemPaid(
   }
   if (type === "home") {
     return updateForUser("fixedExpense", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+  }
+  if (type === "insurance") {
+    return updateForUser("insurance", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
   }
   return updateForUser("saving", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
 }
@@ -431,7 +599,8 @@ export type PlanItemType =
   | "saving"
   | "income"
   | "subscription"
-  | "monthly_fixed";
+  | "monthly_fixed"
+  | "insurance";
 
 export async function updatePlanItem(
   userId: string,
@@ -490,6 +659,18 @@ export async function updatePlanItem(
           ...(data.amount !== undefined && { amount: Number(data.amount) }),
           ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
       });
+    case "insurance": {
+      const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+      return updateForUser("insurance", userId, id, {
+          ...(data.name !== undefined && { name: String(data.name) }),
+          ...(data.amount !== undefined && { premium: Number(data.amount) }),
+          ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+          ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
+          ...(data.insuranceType !== undefined && { insuranceType: data.insuranceType }),
+          ...(paymentStatus !== undefined && { paymentStatus }),
+          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
+      });
+    }
     default:
       throw new Error("Unknown item type");
   }

@@ -25,6 +25,7 @@ async function main() {
   await prisma.fixedExpense.deleteMany();
   await prisma.subscription.deleteMany();
   await prisma.saving.deleteMany();
+  await prisma.savingEntry.deleteMany();
   await prisma.investment.deleteMany();
   await prisma.creditCard.deleteMany();
   await prisma.budget.deleteMany();
@@ -41,6 +42,8 @@ async function main() {
   const user = await prisma.user.create({
     data: {
       name: "Finance User",
+      email: "demo@financeos.app",
+      mobile: "9876543210",
       pinHash,
       salaryDay: SEED_DATA.salaryDay,
     },
@@ -147,6 +150,7 @@ async function main() {
   });
 
   console.log("✅ Seed complete!");
+  console.log(`   Login: demo@financeos.app or 9876543210`);
   console.log(`   Default PIN: ${SEED_DATA.defaultPin}`);
   console.log(`   User ID: ${user.id}`);
 }

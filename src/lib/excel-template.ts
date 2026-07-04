@@ -55,6 +55,12 @@ export const EXCEL_PLAN_TEMPLATE = {
     { name: "Recharge(5)", amount: 1500, renewalDay: 25 },
   ],
 
+  insurances: [
+    { name: "Star Health Medical", provider: "Star Health", insuranceType: "MEDICAL" as const, premium: 18000, coverageAmount: 500000, cycle: "YEARLY" as const, renewalDay: 15, payableAmount: 1500 },
+    { name: "LIC Life Cover", provider: "LIC", insuranceType: "LIFE" as const, premium: 24000, coverageAmount: 1000000, cycle: "YEARLY" as const, renewalDay: 20, payableAmount: 0 },
+    { name: "Term Plan", provider: "HDFC Life", insuranceType: "TERM" as const, premium: 12000, coverageAmount: 5000000, cycle: "YEARLY" as const, renewalDay: 10, payableAmount: 1000 },
+  ],
+
   budget: {
     totalIncome: 135000,
     emiAmount: 79618,

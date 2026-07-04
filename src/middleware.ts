@@ -6,7 +6,15 @@ const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "finance-os-default-secret-change-me"
 );
 
-const publicPaths = ["/login", "/setup", "/api/auth/login", "/api/auth/setup", "/manifest.json", "/sw.js"];
+const publicPaths = [
+  "/login",
+  "/signup",
+  "/setup",
+  "/api/auth/login",
+  "/api/auth/setup",
+  "/manifest.json",
+  "/sw.js",
+];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

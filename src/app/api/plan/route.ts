@@ -21,8 +21,14 @@ export async function GET(request: NextRequest) {
   const month = parseInt(searchParams.get("month") || String(curMonth));
   const year = parseInt(searchParams.get("year") || String(curYear));
 
-  const data = await getExcelMonthlyPlan(session.userId, month, year);
-  return jsonOk(data);
+  try {
+    const data = await getExcelMonthlyPlan(session.userId, month, year);
+    return jsonOk(data);
+  } catch (err) {
+    console.error("Plan load failed:", err);
+    const message = err instanceof Error ? err.message : "Failed to load monthly plan";
+    return jsonError(message, 500);
+  }
 }
 
 export async function PUT(request: NextRequest) {

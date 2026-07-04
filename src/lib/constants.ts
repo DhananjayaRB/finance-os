@@ -109,6 +109,46 @@ export function getLoanTypeMeta(type: string) {
   return LOAN_TYPES.find((t) => t.value === type) ?? LOAN_TYPES.find((t) => t.value === "OTHER")!;
 }
 
+export const INSURANCE_TYPES = [
+  { value: "MEDICAL", label: "Medical / Health", icon: "🏥" },
+  { value: "LIFE", label: "Life Insurance", icon: "🛡️" },
+  { value: "TERM", label: "Term Insurance", icon: "📋" },
+  { value: "VEHICLE", label: "Vehicle", icon: "🚗" },
+  { value: "CRITICAL_ILLNESS", label: "Critical Illness", icon: "💊" },
+  { value: "OTHER", label: "Other", icon: "📄" },
+] as const;
+
+export type InsuranceTypeValue = (typeof INSURANCE_TYPES)[number]["value"];
+
+export function getInsuranceTypeLabel(type: string) {
+  return INSURANCE_TYPES.find((t) => t.value === type)?.label ?? type.replace(/_/g, " ");
+}
+
+export const SAVING_TYPES = [
+  { value: "SIP", label: "SIP / Mutual Fund", icon: "📈" },
+  { value: "GOLD", label: "Gold", icon: "🥇" },
+  { value: "PF", label: "PF / EPF", icon: "💼" },
+  { value: "PPF", label: "PPF", icon: "📊" },
+  { value: "NPS", label: "NPS", icon: "🎯" },
+  { value: "FD", label: "Fixed Deposit", icon: "🏛️" },
+  { value: "RD", label: "Recurring Deposit", icon: "💹" },
+  { value: "EMERGENCY_FUND", label: "Emergency Fund", icon: "🚨" },
+  { value: "MUTUAL_FUND", label: "Mutual Fund", icon: "💰" },
+  { value: "STOCKS", label: "Stocks", icon: "📉" },
+  { value: "CASH", label: "Cash Savings", icon: "💵" },
+  { value: "OTHER", label: "Other", icon: "📋" },
+] as const;
+
+export type SavingTypeValue = (typeof SAVING_TYPES)[number]["value"];
+
+export function getSavingTypeLabel(type: string) {
+  return SAVING_TYPES.find((t) => t.value === type)?.label ?? type.replace(/_/g, " ");
+}
+
+export function getSavingTypeIcon(type: string) {
+  return SAVING_TYPES.find((t) => t.value === type)?.icon ?? "💰";
+}
+
 const APP_KEYWORDS = ["cashbee", "cashee", "cashier", "phone salary", "flexy salary", "kredit", "moneyview", "navi", "payme", "stashfin", "mpokket", "kissht", "slice", "fibe", "bel", "dmi"];
 const CREDIT_CARD_KEYWORDS = ["hdfc rupay", "hdfc milania", "hdfc millenia", "millenia", "milania", "rupay", "credit card", "sbi card", "axis card", "icici card"];
 

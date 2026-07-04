@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LOAN_TYPES } from "@/lib/constants";
+import { LOAN_TYPES, INSURANCE_TYPES } from "@/lib/constants";
 import { PAYMENT_STATUS_META } from "@/lib/payment-status";
 import { INCOME_TYPE_LABELS } from "@/lib/excel-template";
 import type { ExcelPlanItem } from "@/lib/monthly-plan";
@@ -35,6 +35,7 @@ function buildFormFromContext(context: EditContext): Record<string, string> {
     paymentStatus: item.paymentStatus,
     loanType: item.loanType ?? "PERSONAL",
     incomeType: item.incomeType ?? "OTHER",
+    insuranceType: item.insuranceType ?? "MEDICAL",
     dueDay: String(item.emiDate ?? ""),
     renewalDay: String(item.emiDate ?? ""),
   };
@@ -65,6 +66,7 @@ function PlanEditForm({
     type === "saving" ? "Edit Saving" :
     type === "income" ? "Edit Income Source" :
     type === "subscription" ? "Edit Subscription" :
+    type === "insurance" ? "Edit Insurance" :
     "Edit Fixed Expense";
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,10 +86,11 @@ function PlanEditForm({
         payload.payableAmount = parseFloat(form.payableAmount) || 0;
         payload.paymentStatus = form.paymentStatus;
         payload.loanType = form.loanType;
-      } else if (type === "home" || type === "saving") {
+      } else if (type === "home" || type === "saving" || type === "insurance") {
         payload.payableAmount = parseFloat(form.payableAmount) || 0;
         payload.paymentStatus = form.paymentStatus;
-        if (type === "home") payload.dueDay = parseInt(form.dueDay) || 1;
+        if (type === "home" || type === "insurance") payload.dueDay = parseInt(form.dueDay) || 1;
+        if (type === "insurance") payload.insuranceType = form.insuranceType;
       } else if (type === "monthly_fixed") {
         payload.amount = parseFloat(form.amount) || 0;
       } else if (type === "income") {
@@ -171,23 +174,23 @@ function PlanEditForm({
             </>
           )}
 
-          {(type === "home" || type === "saving" || type === "monthly_fixed" || type === "income" || type === "subscription") && (
+          {(type === "home" || type === "saving" || type === "monthly_fixed" || type === "income" || type === "subscription" || type === "insurance") && (
             <div>
               <Label>Amount ₹</Label>
               <Input type="number" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
             </div>
           )}
 
-          {(type === "loan" || type === "home" || type === "saving") && (
+          {(type === "loan" || type === "home" || type === "saving" || type === "insurance") && (
             <div>
               <Label>Payable ₹ (amount still due)</Label>
               <Input type="number" value={form.payableAmount} onChange={(e) => set("payableAmount", e.target.value)} />
             </div>
           )}
 
-          {type === "home" && (
+          {(type === "home" || type === "insurance") && (
             <div>
-              <Label>Due Day</Label>
+              <Label>{type === "insurance" ? "Renewal Day" : "Due Day"}</Label>
               <Input type="number" min={1} max={28} value={form.dueDay} onChange={(e) => set("dueDay", e.target.value)} />
             </div>
           )}
@@ -196,6 +199,21 @@ function PlanEditForm({
             <div>
               <Label>Renewal Day</Label>
               <Input type="number" min={1} max={28} value={form.renewalDay} onChange={(e) => set("renewalDay", e.target.value)} />
+            </div>
+          )}
+
+          {type === "insurance" && (
+            <div>
+              <Label>Insurance Type</Label>
+              <select
+                value={form.insuranceType}
+                onChange={(e) => set("insuranceType", e.target.value)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                {INSURANCE_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
             </div>
           )}
 
@@ -214,7 +232,7 @@ function PlanEditForm({
             </div>
           )}
 
-          {(type === "loan" || type === "home" || type === "saving") && (
+          {(type === "loan" || type === "home" || type === "saving" || type === "insurance") && (
             <div>
               <Label>Payment Status</Label>
               <select

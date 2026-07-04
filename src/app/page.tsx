@@ -16,7 +16,7 @@ export default async function HomePage() {
         title={`Hello, ${session.name.split(" ")[0]}`}
         subtitle="Salary cycle: 7th – 6th • July 2026"
       />
-      <DashboardView data={data as Parameters<typeof DashboardView>[0]["data"]} />
+      <DashboardView data={data} />
       <BottomNav />
     </div>
   );

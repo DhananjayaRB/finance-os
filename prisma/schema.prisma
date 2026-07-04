@@ -131,10 +131,26 @@ enum ImportStatus {
   FAILED
 }
 
+enum InsuranceType {
+  MEDICAL
+  LIFE
+  TERM
+  VEHICLE
+  CRITICAL_ILLNESS
+  OTHER
+}
+
+enum AccountTxType {
+  CREDIT
+  DEBIT
+  ADJUSTMENT
+}
+
 model User {
   id           String   @id @default(cuid())
   name         String   @default("User")
   email        String?  @unique
+  mobile       String?  @unique
   pinHash      String
   salaryDay    Int      @default(7)
   currency     String   @default("INR")
@@ -158,6 +174,9 @@ model User {
   goals          Goal[]
   notifications  Notification[]
   importHistory  ImportHistory[]
+  insurances     Insurance[]
+  accountTransactions AccountTransaction[]
+  savingEntries  SavingEntry[]
 }
 
 model Account {
@@ -170,8 +189,12 @@ model Account {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions AccountTransaction[]
+  incomes      Income[]
+  expenses     Expense[]
 
+  @@unique([userId, name])
   @@index([userId])
 }
 
@@ -196,6 +219,7 @@ model Category {
 model Income {
   id          String     @id @default(cuid())
   userId      String
+  accountId   String?
   source      String
   incomeType  IncomeType @default(OTHER)
   amount      Decimal    @db.Decimal(14, 2)
@@ -207,7 +231,8 @@ model Income {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
 
   @@index([userId, year, month])
 }
@@ -215,6 +240,7 @@ model Income {
 model Expense {
   id            String        @id @default(cuid())
   userId        String
+  accountId     String?
   categoryId    String?
   amount        Decimal       @db.Decimal(14, 2)
   merchant      String?
@@ -229,6 +255,7 @@ model Expense {
   updatedAt     DateTime      @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account  Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@index([userId, year, month])
@@ -331,6 +358,25 @@ model Saving {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model SavingEntry {
+  id        String     @id @default(cuid())
+  userId    String
+  name      String
+  type      SavingType @default(SIP)
+  amount    Decimal    @db.Decimal(14, 2)
+  date      DateTime   @default(now())
+  month     Int
+  year      Int
+  notes     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, year, month])
+  @@index([userId, date])
 }
 
 model Investment {
@@ -470,5 +516,46 @@ model ImportHistory {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+}
+
+model Insurance {
+  id             String            @id @default(cuid())
+  userId         String
+  name           String
+  provider       String?
+  insuranceType  InsuranceType     @default(MEDICAL)
+  premium        Decimal           @db.Decimal(14, 2)
+  coverageAmount Decimal?          @db.Decimal(14, 2)
+  cycle          SubscriptionCycle @default(YEARLY)
+  renewalDay     Int?
+  payableAmount  Decimal           @default(0) @db.Decimal(14, 2)
+  paymentStatus  PaymentStatus     @default(PENDING)
+  isActive       Boolean           @default(true)
+  notes          String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AccountTransaction {
+  id          String        @id @default(cuid())
+  userId      String
+  accountId   String
+  type        AccountTxType
+  amount      Decimal       @db.Decimal(14, 2)
+  description String?
+  refType     String?
+  refId       String?
+  date        DateTime      @default(now())
+  createdAt   DateTime      @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
   @@index([userId])
 }

@@ -49,7 +49,7 @@ function PlanTable({
   title: string;
   headers: string[];
   rows: ExcelPlanItem[];
-  onMarkPaid?: (type: "loan" | "home" | "saving", id: string) => void;
+  onMarkPaid?: (type: "loan" | "home" | "saving" | "insurance", id: string) => void;
   onEdit?: (type: PlanItemType, item: ExcelPlanItem) => void;
   type?: PlanItemType;
   manageHref?: string;
@@ -107,7 +107,7 @@ function PlanTable({
                         {formatCurrency(row.payable)}
                       </td>
                     </>
-                  ) : type === "home" || type === "saving" ? (
+                  ) : type === "home" || type === "saving" || type === "insurance" ? (
                     <>
                       <td className="px-2 py-2 text-right">{formatCurrency(row.amount)}</td>
                       <td className={cn("px-2 py-2 text-right font-medium", row.payable > 0 ? "text-red-600" : "text-emerald-600")}>
@@ -133,7 +133,7 @@ function PlanTable({
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving") && row.payable > 0 && (
+                      {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving" || type === "insurance") && row.payable > 0 && (
                         <button
                           type="button"
                           onClick={() => onMarkPaid(type, row.id)}
@@ -160,23 +160,43 @@ export default function PlanPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [data, setData] = useState<ExcelMonthlyPlan | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editContext, setEditContext] = useState<EditContext | null>(null);
   const [editingPlanIncome, setEditingPlanIncome] = useState(false);
   const [planIncomeDraft, setPlanIncomeDraft] = useState("");
 
   const load = () => {
     setLoading(true);
+    setLoadError(null);
     fetch(`/api/plan?month=${month}&year=${year}`)
-      .then((r) => r.json())
-      .then(setData)
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || "Failed to load plan");
+        setData(d);
+      })
+      .catch((e) => {
+        setLoadError(e instanceof Error ? e.message : "Failed to load plan");
+        setData(null);
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setLoadError(null);
     fetch(`/api/plan?month=${month}&year=${year}`)
-      .then((r) => r.json())
-      .then((d) => { if (active) setData(d); })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || "Failed to load plan");
+        if (active) setData(d);
+      })
+      .catch((e) => {
+        if (active) {
+          setLoadError(e instanceof Error ? e.message : "Failed to load plan");
+          setData(null);
+        }
+      })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [month, year]);
@@ -191,7 +211,7 @@ export default function PlanPage() {
     setYear(y);
   };
 
-  const markPaid = async (type: "loan" | "home" | "saving", id: string) => {
+  const markPaid = async (type: "loan" | "home" | "saving" | "insurance", id: string) => {
     await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -282,6 +302,16 @@ export default function PlanPage() {
           <div className="flex justify-center py-12">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
           </div>
+        ) : loadError ? (
+          <Card className="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20">
+            <CardContent className="space-y-3 p-4 text-center">
+              <p className="text-sm font-medium text-red-700 dark:text-red-300">{loadError}</p>
+              <p className="text-xs text-zinc-500">
+                If this persists, restart the dev server after running: npm run db:push
+              </p>
+              <Button variant="outline" onClick={load}>Try Again</Button>
+            </CardContent>
+          </Card>
         ) : data ? (
           <>
             <Card className="border-2 border-emerald-500">
@@ -324,16 +354,19 @@ export default function PlanPage() {
                       <p className="text-sm font-semibold text-white">
                         Income — Plan: {formatCurrency(data.income.planTotal)}
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPlanIncomeDraft(String(data.income.planTotal));
-                          setEditingPlanIncome(true);
-                        }}
-                        className="rounded p-1 text-white hover:bg-yellow-600"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <Link href="/income" className="text-xs text-yellow-100 underline">Manage →</Link>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPlanIncomeDraft(String(data.income.planTotal));
+                            setEditingPlanIncome(true);
+                          }}
+                          className="rounded p-1 text-white hover:bg-yellow-600"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      </div>
                     </>
                   )}
                 </div>
@@ -400,12 +433,13 @@ export default function PlanPage() {
             />
 
             <PlanTable
-              title={`Savings — Total: ${formatCurrency(t?.savingsTotal ?? 0)} | Payable: ${formatCurrency(t?.savingsPayable ?? 0)}`}
+              title={`Savings — Plan: ${formatCurrency(t?.savingsTotal ?? 0)} | Saved: ${formatCurrency(data.actualSavings?.total ?? 0)} | Payable: ${formatCurrency(t?.savingsPayable ?? 0)}`}
               headers={["Particulars", "Amount", "Payable", "Status"]}
               rows={data.savings}
               onMarkPaid={markPaid}
               onEdit={openEdit}
               type="saving"
+              manageHref="/savings"
             />
 
             <Card>
@@ -413,40 +447,53 @@ export default function PlanPage() {
                 <div className="border-b bg-orange-500 px-3 py-2">
                   <p className="text-sm font-semibold text-white">Before / After Salary ({data.salaryDay}th)</p>
                 </div>
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-zinc-50 dark:bg-zinc-900">
-                      <th className="px-2 py-2 text-left" />
-                      <th className="px-2 py-2 text-right">Loan EMI</th>
-                      <th className="px-2 py-2 text-right">Home Exp</th>
-                      <th className="px-2 py-2 text-right">Savings</th>
-                      <th className="px-2 py-2 text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-t">
-                      <td className="px-2 py-2 font-medium">Before Salary</td>
-                      <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.loan ?? 0)}</td>
-                      <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.home ?? 0)}</td>
-                      <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.savings ?? 0)}</td>
-                      <td className="px-2 py-2 text-right font-bold text-orange-600">{formatCurrency(t?.beforeSalary.total ?? 0)}</td>
-                    </tr>
-                    <tr className="border-t">
-                      <td className="px-2 py-2 font-medium">After Salary</td>
-                      <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.loan ?? 0)}</td>
-                      <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.home ?? 0)}</td>
-                      <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.savings ?? 0)}</td>
-                      <td className="px-2 py-2 text-right font-bold">{formatCurrency(t?.afterSalary.total ?? 0)}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-zinc-50 dark:bg-zinc-900">
+                        <th className="px-2 py-2 text-left" />
+                        <th className="px-2 py-2 text-right">Loan</th>
+                        <th className="px-2 py-2 text-right">Home</th>
+                        <th className="px-2 py-2 text-right">Savings</th>
+                        <th className="px-2 py-2 text-right">Fixed</th>
+                        <th className="px-2 py-2 text-right">Subs</th>
+                        <th className="px-2 py-2 text-right">Insurance</th>
+                        <th className="px-2 py-2 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-t">
+                        <td className="px-2 py-2 font-medium">Before Salary</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.loan ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.home ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.savings ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.fixed ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.subscriptions ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.beforeSalary.insurance ?? 0)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-orange-600">{formatCurrency(t?.beforeSalary.total ?? 0)}</td>
+                      </tr>
+                      <tr className="border-t">
+                        <td className="px-2 py-2 font-medium">After Salary</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.loan ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.home ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.savings ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.fixed ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.subscriptions ?? 0)}</td>
+                        <td className="px-2 py-2 text-right">{formatCurrency(t?.afterSalary.insurance ?? 0)}</td>
+                        <td className="px-2 py-2 text-right font-bold">{formatCurrency(t?.afterSalary.total ?? 0)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </CardContent>
             </Card>
 
             <Card>
               <CardContent className="p-0">
                 <div className="border-b bg-teal-600 px-3 py-2">
-                  <p className="text-sm font-semibold text-white">Monthly Fixed Expenses</p>
+                  <p className="text-sm font-semibold text-white">
+                    Monthly Fixed Expenses — Total: {formatCurrency(t?.fixedTotal ?? 0)}
+                  </p>
                 </div>
                 <table className="w-full text-xs">
                   <thead>
@@ -485,12 +532,55 @@ export default function PlanPage() {
             </Card>
 
             <PlanTable
-              title={`Subscriptions — Total: ${formatCurrency(data.subscriptions.reduce((s, sub) => s + sub.amount, 0))}`}
+              title={`Subscriptions — Total: ${formatCurrency(t?.subscriptionTotal ?? 0)} | Payable: ${formatCurrency(t?.subscriptionPayable ?? 0)}`}
               headers={["Name", "Amount", "Status"]}
               rows={data.subscriptions}
               onEdit={openEdit}
               type="subscription"
+              manageHref="/subscriptions"
             />
+
+            <PlanTable
+              title={`Insurance — Total: ${formatCurrency(t?.insuranceTotal ?? 0)}/mo | Payable: ${formatCurrency(t?.insurancePayable ?? 0)}`}
+              headers={["Policy", "Monthly Premium", "Payable", "Status"]}
+              rows={data.insurances}
+              onMarkPaid={markPaid}
+              onEdit={openEdit}
+              type="insurance"
+              manageHref="/insurance"
+            />
+
+            <Card>
+              <CardContent className="p-0">
+                <div className="flex items-center justify-between border-b bg-rose-600 px-3 py-2">
+                  <p className="text-sm font-semibold text-white">
+                    Other Spend (Actual) — {formatCurrency(data.otherSpend.total)}
+                  </p>
+                  <Link href="/expenses" className="text-xs text-rose-100 underline">View all →</Link>
+                </div>
+                <div className="grid grid-cols-4 gap-1 border-b bg-zinc-50 p-2 text-center text-[10px] dark:bg-zinc-900">
+                  <div><p className="text-zinc-500">Need</p><p className="font-semibold">{formatCurrency(data.otherSpend.need)}</p></div>
+                  <div><p className="text-zinc-500">Want</p><p className="font-semibold">{formatCurrency(data.otherSpend.want)}</p></div>
+                  <div><p className="text-zinc-500">Luxury</p><p className="font-semibold">{formatCurrency(data.otherSpend.luxury)}</p></div>
+                  <div><p className="text-zinc-500">Savings</p><p className="font-semibold">{formatCurrency(data.otherSpend.savings)}</p></div>
+                </div>
+                {data.otherSpend.items.length > 0 ? (
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {data.otherSpend.items.slice(0, 8).map((exp) => (
+                        <tr key={exp.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                          <td className="px-2 py-2 font-medium">{exp.name}</td>
+                          <td className="px-2 py-2 text-zinc-500">{exp.category}</td>
+                          <td className="px-2 py-2 text-right">{formatCurrency(exp.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="p-4 text-center text-xs text-zinc-500">No expenses logged this month yet.</p>
+                )}
+              </CardContent>
+            </Card>
 
             {data.insights.length > 0 && (
               <Card>

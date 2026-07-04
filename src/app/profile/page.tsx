@@ -7,12 +7,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useTheme } from "next-themes";
+import { formatCurrency } from "@/lib/utils";
+import { ThemeToggle } from "@/components/theme-toggle";
 import {
   LogOut,
   Upload,
-  Moon,
-  Sun,
   Wallet,
   CreditCard,
   Target,
@@ -23,12 +22,17 @@ import {
   Landmark,
   Pencil,
   X,
+  Shield,
+  Building2,
+  TrendingUp,
+  PiggyBank,
 } from "lucide-react";
 
 interface UserProfile {
   id: string;
   name: string;
   email: string | null;
+  mobile: string | null;
   salaryDay: number;
   currency: string;
 }
@@ -69,6 +73,7 @@ function ProfileEditForm({
   const [form, setForm] = useState({
     name: profile.name,
     email: profile.email ?? "",
+    mobile: profile.mobile ?? "",
     salaryDay: String(profile.salaryDay),
   });
   const [saving, setSaving] = useState(false);
@@ -85,6 +90,7 @@ function ProfileEditForm({
       const ok = await onSave({
         name: form.name.trim(),
         email: form.email.trim() || null,
+        mobile: form.mobile.trim() || null,
         salaryDay: parseInt(form.salaryDay) || 7,
       });
       if (ok) onClose();
@@ -108,8 +114,12 @@ function ProfileEditForm({
             <Input ref={nameRef} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required />
           </div>
           <div>
-            <Label>Email (optional)</Label>
+            <Label>Email</Label>
             <Input type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="you@email.com" />
+          </div>
+          <div>
+            <Label>Mobile Number</Label>
+            <Input type="tel" inputMode="numeric" value={form.mobile} onChange={(e) => setForm((f) => ({ ...f, mobile: e.target.value }))} placeholder="9876543210" />
           </div>
           <div>
             <Label>Salary Date (day of month)</Label>
@@ -136,17 +146,22 @@ function ProfileEditForm({
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { theme, setTheme } = useTheme();
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [savingsMonthTotal, setSavingsMonthTotal] = useState<number | null>(null);
   const [showEdit, setShowEdit] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadProfile = () => {
-    fetch("/api/profile")
-      .then((r) => r.json())
-      .then(setProfile);
+    const now = new Date();
+    Promise.all([
+      fetch("/api/profile").then((r) => r.json()),
+      fetch(`/api/savings?month=${now.getMonth() + 1}&year=${now.getFullYear()}`).then((r) => r.json()),
+    ]).then(([prof, sav]) => {
+      setProfile(prof);
+      setSavingsMonthTotal(typeof sav.monthTotal === "number" ? sav.monthTotal : 0);
+    });
   };
 
   useEffect(() => { loadProfile(); }, []);
@@ -205,7 +220,11 @@ export default function ProfilePage() {
 
   const menuItems = [
     { icon: CalendarRange, label: "Monthly Plan", href: "/plan" },
+    { icon: TrendingUp, label: "Income", href: "/income" },
+    { icon: PiggyBank, label: "My Savings", href: "/savings" },
+    { icon: Building2, label: "Bank Accounts", href: "/accounts" },
     { icon: Landmark, label: "Loan Manager", href: "/loans" },
+    { icon: Shield, label: "Insurance", href: "/insurance" },
     { icon: Repeat, label: "Subscriptions", href: "/subscriptions" },
     { icon: Wallet, label: "Cash Box", href: "/cash-box" },
     { icon: CreditCard, label: "Credit Cards", href: "/cards" },
@@ -250,6 +269,9 @@ export default function ProfilePage() {
                 {profile?.email && (
                   <p className="text-sm text-zinc-500">{profile.email}</p>
                 )}
+                {profile?.mobile && (
+                  <p className="text-sm text-zinc-500">+91 {profile.mobile}</p>
+                )}
                 <p className="text-sm text-zinc-500">PIN protected • JWT session</p>
               </div>
               <button
@@ -266,6 +288,21 @@ export default function ProfilePage() {
             </Button>
           </CardContent>
         </Card>
+
+        {savingsMonthTotal !== null && (
+          <Card className="border-emerald-200 bg-emerald-50/50 dark:border-emerald-900 dark:bg-emerald-950/20">
+            <CardContent className="flex items-center justify-between p-4">
+              <div className="flex items-center gap-3">
+                <PiggyBank className="h-8 w-8 text-emerald-600" />
+                <div>
+                  <p className="text-sm font-medium">Savings this month</p>
+                  <p className="text-lg font-bold text-emerald-700">{formatCurrency(savingsMonthTotal)}</p>
+                </div>
+              </div>
+              <a href="/savings" className="text-sm font-medium text-emerald-600 underline">Manage</a>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardContent className="divide-y divide-zinc-100 p-0 dark:divide-zinc-800">
@@ -314,24 +351,8 @@ export default function ProfilePage() {
         </Card>
 
         <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <div className="flex items-center gap-3">
-              {theme === "dark" ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
-              <span>Dark Mode</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className={`relative h-7 w-12 rounded-full transition-colors ${
-                theme === "dark" ? "bg-emerald-600" : "bg-zinc-300"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                  theme === "dark" ? "translate-x-5" : "translate-x-0.5"
-                }`}
-              />
-            </button>
+          <CardContent className="p-4">
+            <ThemeToggle />
           </CardContent>
         </Card>
 

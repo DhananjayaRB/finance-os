@@ -51,6 +51,18 @@ export function decimalToNumber(value: { toNumber?: () => number } | number | st
   return Number(value);
 }
 
+/** Convert Prisma Decimal/Date values to JSON-safe plain data for Client Components. */
+export function serializeForClient<T>(value: T): T {
+  return JSON.parse(
+    JSON.stringify(value, (_key, v) => {
+      if (v !== null && typeof v === "object" && typeof (v as { toNumber?: () => number }).toNumber === "function") {
+        return (v as { toNumber: () => number }).toNumber();
+      }
+      return v;
+    })
+  ) as T;
+}
+
 export function calculateBudgetHealth(
   income: number,
   spent: number,
