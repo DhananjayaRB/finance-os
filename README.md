@@ -1,36 +1,98 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Finance OS
 
-## Getting Started
+Personal Financial Operating System — a mobile-first PWA for Indian salaried professionals (Bangalore lifestyle).
 
-First, run the development server:
+## Features
+
+- **Dashboard** — Balance, income, expenses, loans, savings, budget health
+- **Loan Manager** — EMI tracking, prepayment planner, interest savings
+- **Expense Tracker** — Quick add (<5 sec), NEED/WANT/LUXURY/SAVINGS classification
+- **Monthly Budget** — Salary cycle (7th–6th), fixed expenses, subscriptions
+- **Cash Box** — Wallet, home, office, emergency cash
+- **Credit Cards** — Limits, usage, due dates
+- **Goals** — Progress tracking with visual bars
+- **Excel Import** — Upload your finance spreadsheet (.xlsx/.csv)
+- **5-digit PIN auth** — Hashed PIN + JWT session
+- **PWA** — Installable on Android, offline support
+- **Dark/Light mode**
+
+## Tech Stack
+
+- Next.js 15+ (App Router), React 19, TypeScript
+- TailwindCSS, shadcn/ui-style components
+- Prisma ORM + PostgreSQL (Neon)
+- Recharts, Framer Motion, Lucide icons
+- Deploy on Vercel
+
+## Quick Start
 
 ```bash
+cd finance-os
+npm install
+cp .env.example .env
+# Add your DATABASE_URL and JWT_SECRET to .env
+npx prisma db push
+npm run db:seed
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Default PIN after seed:** `12345`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Environment Variables
 
-## Learn More
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | Neon PostgreSQL connection string (pooler) |
+| `DIRECT_URL` | Direct Neon connection (migrations) |
+| `JWT_SECRET` | Secret for JWT sessions (min 32 chars) |
+| `NEXT_PUBLIC_APP_NAME` | App display name |
+| `NEXT_PUBLIC_APP_URL` | Production URL |
 
-To learn more about Next.js, take a look at the following resources:
+## Deploy to Vercel
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Push to GitHub
+2. Import project in Vercel
+3. Add environment variables from `.env.example`
+4. Deploy — `prisma db push` runs on build
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Excel Import
 
-## Deploy on Vercel
+Upload your **My 2026 Finance Management** spreadsheet from Profile → Import Excel.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Auto-imports:
+- Loans & EMI schedule
+- Income sources
+- Fixed expenses
+- Subscriptions
+- Savings targets
+- Monthly budget
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Salary Cycle
+
+Configured for **7th of every month** salary credit (July 7 → August 7 cycle).
+
+## Project Structure
+
+```
+src/
+  app/           # Pages & API routes
+  components/    # UI components
+  lib/           # Auth, DB, utils, import
+  generated/     # Prisma client
+prisma/
+  schema.prisma  # Database models
+  seed.ts        # Sample data from your Excel
+```
+
+## Security
+
+- PIN stored as bcrypt hash (never plain text)
+- JWT in httpOnly cookie
+- HTTPS on production (Vercel)
+- `.env` excluded from git
+
+## License
+
+Private — Personal use
