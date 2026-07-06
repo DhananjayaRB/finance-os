@@ -14,7 +14,7 @@ export default async function HomePage() {
     <div className="mx-auto min-h-screen max-w-lg bg-zinc-50 dark:bg-zinc-950">
       <AppHeader
         title={`Hello, ${session.name.split(" ")[0]}`}
-        subtitle="Salary cycle: 7th – 6th • July 2026"
+        subtitle={`Salary cycle: ${data.period?.salaryDay ?? 7}th • ${data.period?.label ?? ""}`}
       />
       <DashboardView data={data} />
       <BottomNav />

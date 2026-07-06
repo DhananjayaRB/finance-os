@@ -5,6 +5,7 @@ import { formatPrismaError } from "@/lib/prisma-errors";
 import { decimalToNumber, formatCurrency } from "@/lib/utils";
 import { computePaymentStatus, isBeforeSalary, getStatusMeta, resolveDisplayStatus } from "@/lib/payment-status";
 import { insuranceMonthlyAmount } from "@/lib/account-ledger";
+import { buildPlanAlerts } from "@/lib/plan-alerts";
 import type { PaymentStatus } from "@/generated/prisma/client";
 
 export interface ExcelPlanItem {
@@ -134,6 +135,12 @@ export interface ExcelMonthlyPlan {
     totalSpent: number;
     remaining: number;
   };
+  consolidated: {
+    bankBalance: number;
+    cashInHand: number;
+    totalLiquidity: number;
+  };
+  planAlerts: { type: string; title: string; message: string; category: string }[];
 }
 
 const MONTHS = [
@@ -255,15 +262,15 @@ function mapSavingEntry(
   const kind = e.kind as "DEPOSIT" | "WITHDRAWAL" | "MISSED";
   const dueDay = e.dueDay ?? e.date.getDate();
 
-  if (kind === "DEPOSIT") {
+  if (kind === "WITHDRAWAL") {
     return {
       id: e.id,
       name: e.name,
-      amount,
+      amount: -amount,
       payable: 0,
       paymentStatus: "PAID",
-      statusLabel: "Logged",
-      statusColor: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+      statusLabel: "Withdrawn",
+      statusColor: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
       beforeSalary: isBeforeSalary(dueDay, salaryDay),
       savingType: e.type,
       savingSource: "entry",
@@ -272,38 +279,45 @@ function mapSavingEntry(
     };
   }
 
+  if (kind === "MISSED") {
+    return {
+      id: e.id,
+      name: e.name,
+      amount,
+      payable: 0,
+      paymentStatus: "OVERDUE",
+      statusLabel: "Missed",
+      statusColor: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+      beforeSalary: isBeforeSalary(dueDay, salaryDay),
+      savingType: e.type,
+      savingSource: "entry",
+      savingKind: kind,
+      emiDate: dueDay,
+    };
+  }
+
+  // DEPOSIT — respect stored status (Logged when PAID, Pending when not yet done)
   let payable = decimalToNumber(e.payableAmount as string | number);
   const storedStatus = e.paymentStatus;
   if (payable <= 0 && storedStatus !== "PAID" && amount > 0) {
     payable = amount;
   }
-  if (kind === "WITHDRAWAL" || kind === "MISSED") payable = 0;
+  if (storedStatus === "PAID") payable = 0;
 
-  const paymentStatus =
-    kind === "MISSED"
-      ? ("OVERDUE" as PaymentStatus)
-      : kind === "WITHDRAWAL"
-        ? ("PAID" as PaymentStatus)
-        : resolveDisplayStatus({ stored: storedStatus, payable });
+  const paymentStatus = resolveDisplayStatus({ stored: storedStatus, payable });
   const meta = getStatusMeta(paymentStatus);
-
-  const statusLabel =
-    kind === "WITHDRAWAL" ? "Withdrawn" : kind === "MISSED" ? "Missed" : meta.label;
-  const statusColor =
-    kind === "WITHDRAWAL"
-      ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
-      : kind === "MISSED"
-        ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-        : meta.color;
+  const isLogged = storedStatus === "PAID";
 
   return {
     id: e.id,
     name: e.name,
-    amount: kind === "WITHDRAWAL" ? -amount : amount,
+    amount,
     payable,
     paymentStatus,
-    statusLabel,
-    statusColor,
+    statusLabel: isLogged ? "Logged" : meta.label,
+    statusColor: isLogged
+      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+      : meta.color,
     beforeSalary: isBeforeSalary(dueDay, salaryDay),
     savingType: e.type,
     savingSource: "entry",
@@ -402,7 +416,7 @@ export async function getExcelMonthlyPlan(
   const user = await prisma.user.findUnique({ where: { id: userId } });
   const salaryDay = user?.salaryDay ?? 7;
 
-  const [loans, homeExpenses, monthlyFixed, savings, savingEntries, incomes, subscriptions, insurances, expenses, budget] =
+  const [loans, homeExpenses, monthlyFixed, savings, savingEntries, incomes, subscriptions, insurances, expenses, budget, accounts, cashBoxes] =
     await Promise.all([
       prisma.loan.findMany({
         where: { userId, status: { not: "CLOSED" } },
@@ -430,7 +444,12 @@ export async function getExcelMonthlyPlan(
         orderBy: { date: "desc" },
       }),
       prisma.budget.findUnique({ where: { userId_year_month: { userId, year, month } } }),
+      prisma.account.findMany({ where: { userId } }),
+      prisma.cashBox.findMany({ where: { userId } }),
     ]);
+
+  const bankBalance = accounts.reduce((s, a) => s + decimalToNumber(a.balance), 0);
+  const cashInHand = cashBoxes.reduce((s, c) => s + decimalToNumber(c.balance), 0);
 
   const loanItems = loans.map((l) => mapLoan(l, salaryDay, currentDay));
   const homeItems = homeExpenses
@@ -491,7 +510,7 @@ export async function getExcelMonthlyPlan(
   const insuranceItems = insurances.map((ins) => mapInsurance(ins, salaryDay, currentDay));
 
   const savingsDeposited = savingEntries
-    .filter((e) => e.kind === "DEPOSIT")
+    .filter((e) => e.kind === "DEPOSIT" && e.paymentStatus === "PAID")
     .reduce((s, e) => s + decimalToNumber(e.amount), 0);
   const savingsWithdrawn = savingEntries
     .filter((e) => e.kind === "WITHDRAWAL")
@@ -544,6 +563,12 @@ export async function getExcelMonthlyPlan(
     savingsPayableFromPlan + savingsPayableFromEntries,
     savingsRemainingToSave
   );
+  const savingsCommitted = Math.max(
+    savingsTotal,
+    allSavingsRows
+      .filter((s) => s.savingKind !== "WITHDRAWAL" && s.savingKind !== "MISSED")
+      .reduce((sum, s) => sum + Math.abs(s.amount), 0)
+  );
   const fixedTotal = fixedItems.reduce((s, f) => s + f.amount, 0);
   const fixedPayable = fixedItems.reduce((s, f) => s + f.payable, 0);
   const subscriptionTotal = subItems.reduce((s, sub) => s + sub.amount, 0);
@@ -558,7 +583,7 @@ export async function getExcelMonthlyPlan(
     .reduce((s, i) => s + i.amount, 0);
 
   const totalRequired =
-    loanEmi + homeTotal + savingsTotal + fixedTotal + subscriptionTotal + insuranceTotal;
+    loanEmi + homeTotal + savingsCommitted + fixedTotal + subscriptionTotal + insuranceTotal;
   const allPayable =
     loanPayable + homePayable + savingsPayable + fixedPayable + subscriptionPayable + insurancePayable;
   const balance = planIncome - totalRequired - otherSpendTotal;
@@ -637,7 +662,7 @@ export async function getExcelMonthlyPlan(
     currentDay,
   });
 
-  return {
+  const response: ExcelMonthlyPlan = {
     month,
     year,
     monthLabel: monthLabel(month, year),
@@ -708,7 +733,16 @@ export async function getExcelMonthlyPlan(
     insights,
     history: [],
     salaryBreakdown,
+    consolidated: {
+      bankBalance,
+      cashInHand,
+      totalLiquidity: bankBalance + cashInHand,
+    },
+    planAlerts: [],
   };
+
+  response.planAlerts = buildPlanAlerts(response);
+  return response;
 }
 
 function generateInsights(params: {

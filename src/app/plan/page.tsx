@@ -11,7 +11,6 @@ import type { PlanItemType } from "@/lib/monthly-plan";
 import {
   ChevronLeft,
   ChevronRight,
-  RefreshCw,
   CheckCircle2,
   Sparkles,
   AlertTriangle,
@@ -463,17 +462,6 @@ export default function PlanPage() {
     load();
   };
 
-  const resetTemplate = async () => {
-    if (!confirm("Reset plan data from Excel template? This updates loans, expenses, income & savings.")) return;
-    setLoading(true);
-    await fetch("/api/plan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "reset_template", month, year }),
-    });
-    load();
-  };
-
   const openEdit = (type: PlanItemType, item: ExcelPlanItem) => {
     setEditContext({ type, item });
   };
@@ -507,10 +495,6 @@ export default function PlanPage() {
           </button>
         </div>
 
-        <Button variant="outline" className="w-full" onClick={resetTemplate}>
-          <RefreshCw className="h-4 w-4" /> Load Excel Template Data
-        </Button>
-
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
@@ -529,49 +513,75 @@ export default function PlanPage() {
           <>
             <Card className="border-2 border-emerald-500">
               <CardContent className="space-y-3 p-3 text-xs">
-                <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-5">
                   <div>
-                    <p className="text-zinc-500">All Payable</p>
+                    <p className="text-zinc-500">Income</p>
+                    <p className="text-lg font-bold text-yellow-600">{formatCurrency(data.income.planTotal)}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">Payable</p>
                     <p className="text-lg font-bold text-red-600">{formatCurrency(t?.allPayable ?? 0)}</p>
-                    <p className="mt-0.5 text-[10px] leading-tight text-zinc-400">Still unpaid across EMI, home, savings, subs &amp; insurance</p>
+                    <p className="mt-0.5 text-[10px] text-zinc-400">EMI, home, savings due, subs, insurance</p>
                   </div>
                   <div>
-                    <p className="text-zinc-500">Total Required</p>
+                    <p className="text-zinc-500">Required</p>
                     <p className="text-lg font-bold">{formatCurrency(t?.totalRequired ?? 0)}</p>
-                    <p className="mt-0.5 text-[10px] leading-tight text-zinc-400">Full monthly plan — all categories combined</p>
+                    <p className="mt-0.5 text-[10px] text-zinc-400">Full month plan incl. savings</p>
                   </div>
                   <div>
+                    <p className="text-zinc-500">Savings</p>
+                    <p className="text-lg font-bold text-emerald-600">{formatCurrency(t?.savingsNetSaved ?? 0)}</p>
+                    <p className="mt-0.5 text-[10px] text-zinc-400">Saved this month (net)</p>
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
                     <p className="text-zinc-500">Balance</p>
                     <p className={cn("text-lg font-bold", (t?.balance ?? 0) >= 0 ? "text-emerald-600" : "text-red-600")}>
                       {formatCurrency(t?.balance ?? 0)}
                     </p>
-                    <p className="mt-0.5 text-[10px] leading-tight text-zinc-400">Plan income − required − other spend</p>
+                    <p className="mt-0.5 text-[10px] text-zinc-400">Left after plan &amp; spend</p>
                   </div>
                 </div>
-                <div className="grid grid-cols-4 gap-2 border-t border-emerald-200 pt-3 text-center dark:border-emerald-900">
-                  <div>
-                    <p className="text-zinc-500">Saved (net)</p>
-                    <p className="text-base font-bold text-emerald-600">{formatCurrency(t?.savingsNetSaved ?? 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-zinc-500">Withdrawn</p>
-                    <p className="text-base font-bold text-rose-600">{formatCurrency(t?.savingsWithdrawn ?? 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-zinc-500">Missed</p>
-                    <p className="text-base font-bold text-amber-600">{formatCurrency(t?.savingsMissed ?? 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-zinc-500">Still to save</p>
-                    <p className="text-base font-bold text-violet-600">{formatCurrency(t?.savingsStillToSave ?? 0)}</p>
-                  </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-emerald-200 pt-2 dark:border-emerald-900">
+                  <p className="text-[10px] text-zinc-500">
+                    Bank {formatCurrency(data.consolidated?.bankBalance ?? 0)} + Cash {formatCurrency(data.consolidated?.cashInHand ?? 0)} ={" "}
+                    <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                      {formatCurrency(data.consolidated?.totalLiquidity ?? 0)}
+                    </span>
+                  </p>
+                  {(data.planAlerts?.length ?? 0) > 0 && (
+                    <Link href="/notifications" className="text-[10px] font-medium text-amber-600 underline">
+                      {data.planAlerts.length} alert{data.planAlerts.length > 1 ? "s" : ""} →
+                    </Link>
+                  )}
                 </div>
-                <p className="text-[10px] leading-relaxed text-zinc-500">
-                  <span className="font-medium">Formula:</span> Balance = Plan Income ({formatCurrency(data.income.planTotal)}) − Total Required − Other Spend ({formatCurrency(t?.otherSpendTotal ?? 0)}).
-                  Saved = Deposits − Withdrawals from <Link href="/savings" className="underline">My Savings</Link>.
-                </p>
               </CardContent>
             </Card>
+
+            {(data.planAlerts?.length ?? 0) > 0 && (
+              <Card className="border-amber-300 dark:border-amber-800">
+                <CardContent className="p-3">
+                  <p className="mb-2 text-xs font-semibold text-amber-700 dark:text-amber-300">Pending / Due / Overdue</p>
+                  <div className="space-y-1.5">
+                    {data.planAlerts.slice(0, 5).map((alert, i) => (
+                      <div key={i} className="flex items-start gap-2 text-[11px]">
+                        <span className={cn(
+                          "shrink-0 rounded px-1.5 py-0.5 font-medium uppercase",
+                          alert.type === "critical" ? "bg-red-100 text-red-700" :
+                          alert.type === "warning" ? "bg-amber-100 text-amber-700" :
+                          "bg-zinc-100 text-zinc-600"
+                        )}>
+                          {alert.type}
+                        </span>
+                        <div>
+                          <p className="font-medium">{alert.title}</p>
+                          <p className="text-zinc-500">{alert.message}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {data.salaryBreakdown && (
               <SalaryBreakdownCard breakdown={data.salaryBreakdown} />

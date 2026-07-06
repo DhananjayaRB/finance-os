@@ -25,6 +25,33 @@ export function getCurrentMonthYear() {
   return { month: now.getMonth() + 1, year: now.getFullYear() };
 }
 
+const MONTHS_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** Financial year slices from July through the given calendar month. */
+export function getYtdMonthsFromJuly(month: number, year: number) {
+  const result: { month: number; year: number; label: string }[] = [];
+  if (month >= 7) {
+    for (let m = 7; m <= month; m++) {
+      result.push({ month: m, year, label: MONTHS_SHORT[m - 1] });
+    }
+  } else {
+    for (let m = 7; m <= 12; m++) {
+      result.push({ month: m, year: year - 1, label: MONTHS_SHORT[m - 1] });
+    }
+    for (let m = 1; m <= month; m++) {
+      result.push({ month: m, year, label: MONTHS_SHORT[m - 1] });
+    }
+  }
+  return result;
+}
+
+export function monthYearLabel(month: number, year: number) {
+  return `${MONTHS_SHORT[month - 1]} ${year}`;
+}
+
 export function getSalaryCycleDates(salaryDay: number, refDate = new Date()) {
   const year = refDate.getFullYear();
   const month = refDate.getMonth();

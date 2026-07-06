@@ -95,13 +95,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (body.action === "reset_template") {
-    const { seedExcelTemplate } = await import("@/lib/seed-excel-template");
-    await seedExcelTemplate(session.userId, month, year);
-    const analysis = await getExcelMonthlyPlan(session.userId, month, year);
-    return jsonOk(analysis);
-  }
-
   if (body.action === "update_item") {
     const { type, id, data } = body;
     if (!type || !id) return jsonError("type and id required");

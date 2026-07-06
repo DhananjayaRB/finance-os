@@ -167,14 +167,11 @@ export async function PUT(request: NextRequest) {
   if (rest.type !== undefined) data.type = rest.type;
   if (rest.kind !== undefined) data.kind = rest.kind;
   if (rest.amount !== undefined) data.amount = Number(rest.amount);
-
-  const effectiveKind = (rest.kind as string) || existing.kind;
-  if (effectiveKind === "DEPOSIT") {
+  if (rest.paymentStatus !== undefined) data.paymentStatus = rest.paymentStatus;
+  if (rest.paymentStatus === "PAID") {
     data.payableAmount = 0;
-    data.paymentStatus = "PAID";
-  } else {
-    if (rest.payableAmount !== undefined) data.payableAmount = Number(rest.payableAmount);
-    if (rest.paymentStatus !== undefined) data.paymentStatus = rest.paymentStatus;
+  } else if (rest.payableAmount !== undefined) {
+    data.payableAmount = Number(rest.payableAmount);
   }
   if (rest.dueDay !== undefined) data.dueDay = Number(rest.dueDay);
   if (rest.notes !== undefined) data.notes = rest.notes || null;
