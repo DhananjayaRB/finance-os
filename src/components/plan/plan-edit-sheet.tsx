@@ -166,7 +166,9 @@ function PlanEditForm({
                   onChange={(e) => set("loanType", e.target.value)}
                   className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
                 >
-                  {LOAN_TYPES.filter((t) => ["PERSONAL", "APP", "CREDIT_CARD"].includes(t.value)).map((t) => (
+                  {LOAN_TYPES.filter((t) =>
+                    ["PERSONAL", "APP", "CREDIT_CARD", "HOME", "CAR", "OTHER"].includes(t.value)
+                  ).map((t) => (
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>

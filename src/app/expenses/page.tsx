@@ -6,7 +6,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
 import { getPaymentMethodLabel } from "@/lib/constants";
-import { Trash2 } from "lucide-react";
+import {
+  ExpenseEditSheet,
+  type ExpenseFormData,
+} from "@/components/expenses/expense-edit-sheet";
+import { Pencil, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 interface Expense {
@@ -15,19 +19,52 @@ interface Expense {
   merchant: string | null;
   classification: string;
   paymentMethod: string;
+  notes: string | null;
   date: string;
+  account?: { id: string; name: string } | null;
   category?: { name: string; icon: string | null } | null;
+}
+
+interface BankAccount {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+}
+
+function toFormData(exp: Expense): ExpenseFormData {
+  return {
+    id: exp.id,
+    merchant: exp.merchant || "",
+    amount: Number(exp.amount),
+    classification: exp.classification,
+    paymentMethod: exp.paymentMethod,
+    notes: exp.notes || "",
+    date: new Date(exp.date).toISOString().slice(0, 10),
+    accountId: exp.account?.id || "",
+  };
 }
 
 export default function ExpensesPage() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editExpense, setEditExpense] = useState<ExpenseFormData | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      fetch("/api/expenses").then((r) => r.json()),
+      fetch("/api/accounts").then((r) => r.json()),
+    ])
+      .then(([expenseData, accountData]) => {
+        setExpenses(Array.isArray(expenseData) ? expenseData : []);
+        setAccounts(accountData.accounts || []);
+      })
+      .finally(() => setLoading(false));
+  };
 
   useEffect(() => {
-    fetch("/api/expenses")
-      .then((r) => r.json())
-      .then(setExpenses)
-      .finally(() => setLoading(false));
+    load();
   }, []);
 
   const total = expenses.reduce((s, e) => s + Number(e.amount), 0);
@@ -41,8 +78,41 @@ export default function ExpensesPage() {
   );
 
   const handleDelete = async (id: string) => {
-    await fetch(`/api/expenses?id=${id}`, { method: "DELETE" });
+    if (!confirm("Delete this expense?")) return;
+    const res = await fetch(`/api/expenses?id=${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Failed to delete");
+      return;
+    }
     setExpenses((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  const handleEditSave = async (data: ExpenseFormData): Promise<boolean> => {
+    const res = await fetch("/api/expenses", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: data.id,
+        merchant: data.merchant,
+        amount: data.amount,
+        classification: data.classification,
+        paymentMethod: data.paymentMethod,
+        notes: data.notes,
+        date: data.date,
+        accountId: data.accountId || undefined,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Failed to update expense");
+      return false;
+    }
+    const updated = await res.json();
+    setExpenses((prev) =>
+      prev.map((e) => (e.id === data.id ? { ...e, ...updated } : e))
+    );
+    return true;
   };
 
   return (
@@ -75,24 +145,39 @@ export default function ExpensesPage() {
           expenses.map((exp) => (
             <Card key={exp.id}>
               <CardContent className="flex items-center justify-between p-4">
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">{exp.category?.icon || "💸"}</span>
-                  <div>
-                    <p className="font-medium">{exp.merchant || "Expense"}</p>
-                    <p className="text-xs text-zinc-500">
-                      {exp.classification} • {getPaymentMethodLabel(exp.paymentMethod)} •{" "}
-                      {new Date(exp.date).toLocaleDateString("en-IN")}
-                    </p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{exp.category?.icon || "💸"}</span>
+                    <div className="min-w-0">
+                      <p className="font-medium">{exp.merchant || "Expense"}</p>
+                      <p className="text-xs text-zinc-500">
+                        {exp.classification} • {getPaymentMethodLabel(exp.paymentMethod)}
+                        {exp.account ? ` • ${exp.account.name}` : ""} •{" "}
+                        {new Date(exp.date).toLocaleDateString("en-IN")}
+                      </p>
+                      {exp.notes && (
+                        <p className="mt-0.5 truncate text-xs text-zinc-400">{exp.notes}</p>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-1">
                   <span className="font-semibold text-red-600">
                     -{formatCurrency(Number(exp.amount))}
                   </span>
                   <button
                     type="button"
+                    onClick={() => setEditExpense(toFormData(exp))}
+                    className="rounded p-1 text-zinc-400 hover:text-emerald-600"
+                    aria-label="Edit expense"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleDelete(exp.id)}
                     className="rounded p-1 text-zinc-400 hover:text-red-500"
+                    aria-label="Delete expense"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -102,6 +187,15 @@ export default function ExpensesPage() {
           ))
         )}
       </div>
+
+      {editExpense && (
+        <ExpenseEditSheet
+          expense={editExpense}
+          accounts={accounts}
+          onClose={() => setEditExpense(null)}
+          onSave={handleEditSave}
+        />
+      )}
 
       <BottomNav />
     </div>

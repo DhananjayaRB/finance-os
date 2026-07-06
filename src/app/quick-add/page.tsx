@@ -1,11 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/layout/bottom-nav";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { QUICK_AMOUNTS, PAYMENT_METHODS, type PaymentMethodValue } from "@/lib/constants";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  QUICK_AMOUNTS,
+  PAYMENT_METHODS,
+  isBankPayment,
+  type PaymentMethodValue,
+} from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
@@ -13,19 +20,44 @@ import Link from "next/link";
 const CLASSIFICATIONS = ["NEED", "WANT", "LUXURY", "SAVINGS"] as const;
 const MERCHANTS = ["Swiggy", "Zomato", "Zepto", "Metro", "Amazon", "Food", "Fuel", "Others"];
 
+interface BankAccount {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+}
+
 export default function QuickAddPage() {
   const router = useRouter();
   const [amount, setAmount] = useState("");
   const [merchant, setMerchant] = useState("Swiggy");
   const [classification, setClassification] = useState<string>("WANT");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodValue>("UPI");
+  const [notes, setNotes] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const primaryAccount = accounts.find((a) => a.isPrimary) ?? accounts[0];
+  const showBank = isBankPayment(paymentMethod);
+
+  useEffect(() => {
+    fetch("/api/accounts")
+      .then((r) => r.json())
+      .then((d) => setAccounts(d.accounts || []))
+      .catch(() => setAccounts([]));
+  }, []);
+
+  useEffect(() => {
+    if (showBank && primaryAccount && !accountId) {
+      setAccountId(primaryAccount.id);
+    }
+  }, [showBank, primaryAccount, accountId]);
 
   const handleSave = async () => {
     if (!amount || parseFloat(amount) <= 0) return;
     setSaving(true);
     try {
-      await fetch("/api/expenses", {
+      const res = await fetch("/api/expenses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -33,8 +65,15 @@ export default function QuickAddPage() {
           merchant,
           classification,
           paymentMethod,
+          notes: notes.trim() || undefined,
+          accountId: showBank ? accountId || primaryAccount?.id : undefined,
         }),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || "Failed to add expense");
+        return;
+      }
       router.push("/expenses");
       router.refresh();
     } finally {
@@ -129,6 +168,24 @@ export default function QuickAddPage() {
           </div>
         </div>
 
+        {showBank && accounts.length > 0 && (
+          <div>
+            <Label>Bank account</Label>
+            <select
+              value={accountId || primaryAccount?.id || ""}
+              onChange={(e) => setAccountId(e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                  {a.isPrimary ? " (Primary)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div>
           <p className="mb-2 text-sm font-medium text-zinc-500">Classification</p>
           <div className="grid grid-cols-4 gap-2">
@@ -147,6 +204,16 @@ export default function QuickAddPage() {
               </button>
             ))}
           </div>
+        </div>
+
+        <div>
+          <Label>Notes (optional)</Label>
+          <Input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Add a note..."
+            className="mt-1"
+          />
         </div>
 
         <Button

@@ -1,5 +1,7 @@
 import prisma from "@/lib/db";
 import { updateForUser } from "@/lib/prisma-helpers";
+import { parseLoanType } from "@/lib/constants";
+import { formatPrismaError } from "@/lib/prisma-errors";
 import { decimalToNumber, formatCurrency } from "@/lib/utils";
 import { computePaymentStatus, isBeforeSalary, getStatusMeta } from "@/lib/payment-status";
 import { insuranceMonthlyAmount } from "@/lib/account-ledger";
@@ -608,10 +610,15 @@ export async function updatePlanItem(
   id: string,
   data: Record<string, unknown>
 ) {
-  switch (type) {
-    case "loan": {
-      const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
-      return updateForUser("loan", userId, id, {
+  try {
+    switch (type) {
+      case "loan": {
+        const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+        const loanType = data.loanType !== undefined ? parseLoanType(data.loanType) : undefined;
+        if (data.loanType !== undefined && !loanType) {
+          throw new Error(`Invalid loan type: ${data.loanType}`);
+        }
+        const result = await updateForUser("loan", userId, id, {
           ...(data.name !== undefined && { name: String(data.name) }),
           ...(data.emiAmount !== undefined && { emiAmount: Number(data.emiAmount) }),
           ...(data.outstanding !== undefined && { outstanding: Number(data.outstanding) }),
@@ -619,60 +626,79 @@ export async function updatePlanItem(
           ...(data.emiDate !== undefined && { emiDate: Number(data.emiDate) }),
           ...(data.interestRate !== undefined && { interestRate: Number(data.interestRate) }),
           ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
-          ...(data.loanType !== undefined && { loanType: data.loanType as "PERSONAL" | "APP" | "CREDIT_CARD" | "HOME" | "CAR" | "OTHER" }),
+          ...(loanType !== undefined && { loanType }),
           ...(paymentStatus !== undefined && { paymentStatus }),
           ...(paymentStatus === "CLOSED" && { status: "CLOSED" }),
           ...(paymentStatus === "PAID" && { payableAmount: 0 }),
-      });
-    }
+        });
+        if (!result) throw new Error("Loan not found");
+        return result;
+      }
     case "home":
     case "monthly_fixed": {
       const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
-      return updateForUser("fixedExpense", userId, id, {
-          ...(data.name !== undefined && { name: String(data.name) }),
-          ...(data.amount !== undefined && { amount: Number(data.amount) }),
-          ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
-          ...(data.dueDay !== undefined && { dueDay: Number(data.dueDay) }),
-          ...(paymentStatus !== undefined && { paymentStatus }),
-          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
+      const result = await updateForUser("fixedExpense", userId, id, {
+        ...(data.name !== undefined && { name: String(data.name) }),
+        ...(data.amount !== undefined && { amount: Number(data.amount) }),
+        ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+        ...(data.dueDay !== undefined && { dueDay: Number(data.dueDay) }),
+        ...(paymentStatus !== undefined && { paymentStatus }),
+        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
+      if (!result) throw new Error("Item not found");
+      return result;
     }
     case "saving": {
       const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
-      return updateForUser("saving", userId, id, {
-          ...(data.name !== undefined && { name: String(data.name) }),
-          ...(data.amount !== undefined && { amount: Number(data.amount) }),
-          ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
-          ...(paymentStatus !== undefined && { paymentStatus }),
-          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
+      const result = await updateForUser("saving", userId, id, {
+        ...(data.name !== undefined && { name: String(data.name) }),
+        ...(data.amount !== undefined && { amount: Number(data.amount) }),
+        ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+        ...(paymentStatus !== undefined && { paymentStatus }),
+        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
+      if (!result) throw new Error("Item not found");
+      return result;
     }
-    case "income":
-      return updateForUser("income", userId, id, {
-          ...(data.name !== undefined && { source: String(data.name) }),
-          ...(data.amount !== undefined && { amount: Number(data.amount) }),
-          ...(data.incomeType !== undefined && { incomeType: data.incomeType as "SALARY" | "HDFC" | "CANARA" | "GOLD" | "PF" | "OTHER" }),
+    case "income": {
+      const result = await updateForUser("income", userId, id, {
+        ...(data.name !== undefined && { source: String(data.name) }),
+        ...(data.amount !== undefined && { amount: Number(data.amount) }),
+        ...(data.incomeType !== undefined && {
+          incomeType: data.incomeType as "SALARY" | "HDFC" | "CANARA" | "GOLD" | "PF" | "OTHER",
+        }),
       });
-    case "subscription":
-      return updateForUser("subscription", userId, id, {
-          ...(data.name !== undefined && { name: String(data.name) }),
-          ...(data.amount !== undefined && { amount: Number(data.amount) }),
-          ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
+      if (!result) throw new Error("Item not found");
+      return result;
+    }
+    case "subscription": {
+      const result = await updateForUser("subscription", userId, id, {
+        ...(data.name !== undefined && { name: String(data.name) }),
+        ...(data.amount !== undefined && { amount: Number(data.amount) }),
+        ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
       });
+      if (!result) throw new Error("Item not found");
+      return result;
+    }
     case "insurance": {
       const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
-      return updateForUser("insurance", userId, id, {
-          ...(data.name !== undefined && { name: String(data.name) }),
-          ...(data.amount !== undefined && { premium: Number(data.amount) }),
-          ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
-          ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
-          ...(data.insuranceType !== undefined && { insuranceType: data.insuranceType }),
-          ...(paymentStatus !== undefined && { paymentStatus }),
-          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
+      const result = await updateForUser("insurance", userId, id, {
+        ...(data.name !== undefined && { name: String(data.name) }),
+        ...(data.amount !== undefined && { premium: Number(data.amount) }),
+        ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+        ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
+        ...(data.insuranceType !== undefined && { insuranceType: data.insuranceType }),
+        ...(paymentStatus !== undefined && { paymentStatus }),
+        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
+      if (!result) throw new Error("Item not found");
+      return result;
     }
     default:
       throw new Error("Unknown item type");
+    }
+  } catch (err) {
+    throw new Error(formatPrismaError(err));
   }
 }
 

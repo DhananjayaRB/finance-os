@@ -82,6 +82,10 @@ export const PAYMENT_METHODS = [
 
 export type PaymentMethodValue = (typeof PAYMENT_METHODS)[number]["value"];
 
+export function isBankPayment(method: string) {
+  return ["UPI", "DEBIT_CARD", "NET_BANKING", "AUTO_DEBIT", "OTHER"].includes(method);
+}
+
 export function getPaymentMethodLabel(method: string) {
   return PAYMENT_METHODS.find((p) => p.value === method)?.label ?? method.replace(/_/g, " ");
 }
@@ -104,6 +108,14 @@ export const LOAN_TYPES = [
 ] as const;
 
 export type LoanTypeValue = (typeof LOAN_TYPES)[number]["value"];
+
+const LOAN_TYPE_VALUES = new Set(LOAN_TYPES.map((t) => t.value));
+
+export function parseLoanType(value: unknown): LoanTypeValue | undefined {
+  if (typeof value !== "string") return undefined;
+  const upper = value.toUpperCase();
+  return LOAN_TYPE_VALUES.has(upper as LoanTypeValue) ? (upper as LoanTypeValue) : undefined;
+}
 
 export function getLoanTypeMeta(type: string) {
   return LOAN_TYPES.find((t) => t.value === type) ?? LOAN_TYPES.find((t) => t.value === "OTHER")!;

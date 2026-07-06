@@ -1,8 +1,7 @@
 import prisma from "@/lib/db";
+import { isBankPayment } from "@/lib/constants";
 
-export function isBankPayment(method: string) {
-  return ["UPI", "DEBIT_CARD", "NET_BANKING", "AUTO_DEBIT"].includes(method);
-}
+export { isBankPayment };
 
 export async function getPrimaryAccount(userId: string) {
   const primary = await prisma.account.findFirst({
@@ -222,7 +221,7 @@ export async function applyExpenseToSource(params: {
 
   if (paymentMethod === "CREDIT_CARD") return null;
 
-  if (isBankPayment(paymentMethod) || paymentMethod === "OTHER") {
+  if (isBankPayment(paymentMethod)) {
     let accountId = params.accountId;
     if (!accountId) {
       const account = await ensureDefaultBankAccount(userId);

@@ -5,6 +5,8 @@ import { jsonOk, jsonError } from "@/lib/api-utils";
 import { getCurrentMonthYear } from "@/lib/utils";
 import { deleteForUser } from "@/lib/prisma-helpers";
 import { applyExpenseToSource, reverseExpenseFromSource } from "@/lib/account-ledger";
+import { isBankPayment } from "@/lib/constants";
+import type { ExpenseClass, PaymentMethod } from "@/generated/prisma/client";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -74,6 +76,105 @@ export async function POST(request: NextRequest) {
   });
 
   return jsonOk(expense, 201);
+}
+
+export async function PUT(request: NextRequest) {
+  const session = await getSession();
+  if (!session) return jsonError("Unauthorized", 401);
+
+  const body = await request.json();
+  const { id, ...rest } = body;
+  if (!id) return jsonError("ID required");
+
+  const existing = await prisma.expense.findFirst({
+    where: { id, userId: session.userId },
+  });
+  if (!existing) return jsonError("Expense not found", 404);
+
+  const newAmount = rest.amount !== undefined ? Number(rest.amount) : Number(existing.amount);
+  if (newAmount <= 0) return jsonError("Amount must be greater than zero");
+
+  const newPaymentMethod = (rest.paymentMethod ?? existing.paymentMethod) as PaymentMethod;
+  const newMerchant = rest.merchant !== undefined ? rest.merchant : existing.merchant;
+  const requestedAccountId =
+    rest.accountId !== undefined ? (rest.accountId || null) : existing.accountId;
+  const debitSource = rest.debitSource !== false;
+
+  const hadLedger =
+    Number(existing.amount) > 0 &&
+    (existing.paymentMethod === "CASH" ||
+      (existing.accountId && isBankPayment(existing.paymentMethod)));
+
+  if (hadLedger) {
+    try {
+      await reverseExpenseFromSource({
+        userId: session.userId,
+        amount: Number(existing.amount),
+        paymentMethod: existing.paymentMethod,
+        accountId: existing.accountId,
+        refId: id,
+        description: `Expense edit reversal: ${existing.merchant || "Expense"}`,
+      });
+    } catch {
+      return jsonError("Cannot edit — insufficient balance to adjust ledger");
+    }
+  }
+
+  let accountId: string | null = requestedAccountId;
+
+  if (debitSource && newAmount > 0) {
+    try {
+      const result = await applyExpenseToSource({
+        userId: session.userId,
+        amount: newAmount,
+        paymentMethod: newPaymentMethod,
+        accountId: requestedAccountId,
+        refId: id,
+        description: newMerchant ? `Expense: ${newMerchant}` : "Expense",
+      });
+      if (isBankPayment(newPaymentMethod)) {
+        accountId = result?.accountId ?? requestedAccountId;
+      } else {
+        accountId = null;
+      }
+    } catch (err) {
+      if (hadLedger) {
+        await applyExpenseToSource({
+          userId: session.userId,
+          amount: Number(existing.amount),
+          paymentMethod: existing.paymentMethod,
+          accountId: existing.accountId,
+          refId: id,
+          description: existing.merchant ? `Expense: ${existing.merchant}` : "Expense",
+        }).catch(() => undefined);
+      }
+      const message = err instanceof Error ? err.message : "Failed to debit payment source";
+      return jsonError(message);
+    }
+  } else {
+    accountId = null;
+  }
+
+  const data: Record<string, unknown> = { accountId };
+  if (rest.merchant !== undefined) data.merchant = String(rest.merchant).trim() || null;
+  if (rest.amount !== undefined) data.amount = newAmount;
+  if (rest.classification !== undefined) data.classification = rest.classification as ExpenseClass;
+  if (rest.paymentMethod !== undefined) data.paymentMethod = newPaymentMethod;
+  if (rest.notes !== undefined) data.notes = rest.notes ? String(rest.notes).trim() : null;
+  if (rest.date !== undefined) {
+    const d = new Date(rest.date);
+    data.date = d;
+    data.month = d.getMonth() + 1;
+    data.year = d.getFullYear();
+  }
+
+  const expense = await prisma.expense.update({
+    where: { id },
+    data,
+    include: { category: true, account: { select: { id: true, name: true } } },
+  });
+
+  return jsonOk(expense);
 }
 
 export async function DELETE(request: NextRequest) {

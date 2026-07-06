@@ -11,6 +11,7 @@ import {
   type PlanItemType,
 } from "@/lib/monthly-plan";
 import { getCurrentMonthYear } from "@/lib/utils";
+import { formatPrismaError } from "@/lib/prisma-errors";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -81,9 +82,15 @@ export async function POST(request: NextRequest) {
   if (body.action === "mark_paid") {
     const { type, id } = body;
     if (!type || !id) return jsonError("type and id required");
-    await markItemPaid(session.userId, type, id);
-    const analysis = await getExcelMonthlyPlan(session.userId, month, year);
-    return jsonOk(analysis);
+    try {
+      const updated = await markItemPaid(session.userId, type, id);
+      if (!updated) return jsonError("Item not found", 404);
+      const analysis = await getExcelMonthlyPlan(session.userId, month, year);
+      return jsonOk(analysis);
+    } catch (err) {
+      console.error("mark_paid failed:", err);
+      return jsonError(formatPrismaError(err), 500);
+    }
   }
 
   if (body.action === "reset_template") {
@@ -96,9 +103,14 @@ export async function POST(request: NextRequest) {
   if (body.action === "update_item") {
     const { type, id, data } = body;
     if (!type || !id) return jsonError("type and id required");
-    await updatePlanItem(session.userId, type as PlanItemType, id, data ?? {});
-    const analysis = await getExcelMonthlyPlan(session.userId, month, year);
-    return jsonOk(analysis);
+    try {
+      await updatePlanItem(session.userId, type as PlanItemType, id, data ?? {});
+      const analysis = await getExcelMonthlyPlan(session.userId, month, year);
+      return jsonOk(analysis);
+    } catch (err) {
+      console.error("update_item failed:", err);
+      return jsonError(formatPrismaError(err), 500);
+    }
   }
 
   if (body.action === "update_plan_income") {
