@@ -102,6 +102,9 @@ export async function POST(request: NextRequest) {
         name,
         type: (body.type || "SIP") as SavingType,
         amount,
+        payableAmount: body.payableAmount !== undefined ? Number(body.payableAmount) : 0,
+        paymentStatus: (body.paymentStatus || "PAID") as "PAID" | "PENDING" | "DUE" | "OVERDUE" | "CLOSED",
+        dueDay: body.dueDay !== undefined ? Number(body.dueDay) : date.getDate(),
         date,
         month,
         year,
@@ -131,6 +134,9 @@ export async function PUT(request: NextRequest) {
   if (rest.name !== undefined) data.name = String(rest.name).trim();
   if (rest.type !== undefined) data.type = rest.type;
   if (rest.amount !== undefined) data.amount = Number(rest.amount);
+  if (rest.payableAmount !== undefined) data.payableAmount = Number(rest.payableAmount);
+  if (rest.paymentStatus !== undefined) data.paymentStatus = rest.paymentStatus;
+  if (rest.dueDay !== undefined) data.dueDay = Number(rest.dueDay);
   if (rest.notes !== undefined) data.notes = rest.notes || null;
   if (rest.date !== undefined) {
     const d = new Date(rest.date);

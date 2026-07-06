@@ -107,6 +107,7 @@ export interface ExcelMonthlyPlan {
   salaryBreakdown: {
     incomeReceived: number;
     salaryReceived: number;
+    planIncome: number;
     emi: number;
     homeExpense: number;
     fixedExpense: number;
@@ -192,7 +193,10 @@ function mapFixedExpense(
   currentDay: number
 ): ExcelPlanItem {
   const amount = decimalToNumber(fe.amount as string | number);
-  const payable = decimalToNumber(fe.payableAmount as string | number);
+  let payable = decimalToNumber(fe.payableAmount as string | number);
+  if (payable <= 0 && fe.paymentStatus !== "PAID" && amount > 0) {
+    payable = amount;
+  }
   const paymentStatus = resolveDisplayStatus({
     stored: fe.paymentStatus,
     payable,
@@ -207,9 +211,54 @@ function mapFixedExpense(
     paymentStatus,
     statusLabel: meta.label,
     statusColor: meta.color,
-    beforeSalary: fe.dueDay ? isBeforeSalary(fe.dueDay, salaryDay) : false,
+    beforeSalary: isBeforeSalary(fe.dueDay ?? salaryDay, salaryDay),
     category: fe.category ?? undefined,
     emiDate: fe.dueDay ?? undefined,
+  };
+}
+
+function amountForSalarySplit(item: ExcelPlanItem): number {
+  return item.amount;
+}
+
+function mapSavingEntry(
+  e: {
+    id: string;
+    name: string;
+    type: string;
+    amount: unknown;
+    payableAmount: unknown;
+    paymentStatus: PaymentStatus;
+    dueDay: number | null;
+    date: Date;
+  },
+  salaryDay: number
+): ExcelPlanItem {
+  const amount = decimalToNumber(e.amount as string | number);
+  let payable = decimalToNumber(e.payableAmount as string | number);
+  const storedStatus = e.paymentStatus;
+  if (payable <= 0 && storedStatus !== "PAID" && amount > 0) {
+    payable = amount;
+  }
+  const paymentStatus = resolveDisplayStatus({ stored: storedStatus, payable });
+  const meta = getStatusMeta(paymentStatus);
+  const dueDay = e.dueDay ?? e.date.getDate();
+  const isLoggedDeposit = storedStatus === "PAID" && payable <= 0;
+
+  return {
+    id: e.id,
+    name: e.name,
+    amount,
+    payable,
+    paymentStatus,
+    statusLabel: isLoggedDeposit ? "Logged" : meta.label,
+    statusColor: isLoggedDeposit
+      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+      : meta.color,
+    beforeSalary: isBeforeSalary(dueDay, salaryDay),
+    savingType: e.type,
+    savingSource: "entry",
+    emiDate: dueDay,
   };
 }
 
@@ -340,18 +389,9 @@ export async function getExcelMonthlyPlan(
   const fixedItems = monthlyFixed.map((f) => mapFixedExpense(f, salaryDay, currentDay));
   const savingItems = savings.map((s) => mapSaving(s, salaryDay, currentDay));
   const planSavingsRows = savingItems.map((s) => ({ ...s, savingSource: "plan" as const }));
-  const loggedSavingsRows: ExcelPlanItem[] = savingEntries.map((e) => ({
-    id: e.id,
-    name: e.name,
-    amount: decimalToNumber(e.amount),
-    payable: 0,
-    paymentStatus: "PAID" as PaymentStatus,
-    statusLabel: "Logged",
-    statusColor: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
-    beforeSalary: true,
-    savingType: e.type,
-    savingSource: "entry" as const,
-  }));
+  const loggedSavingsRows: ExcelPlanItem[] = savingEntries.map((e) =>
+    mapSavingEntry(e, salaryDay)
+  );
   const allSavingsRows = [...planSavingsRows, ...loggedSavingsRows];
 
   const incomeSources: ExcelPlanItem[] = incomes.map((inc) => {
@@ -375,22 +415,25 @@ export async function getExcelMonthlyPlan(
 
   const subItems: ExcelPlanItem[] = subscriptions.map((sub) => {
     const amount = decimalToNumber(sub.amount);
-    const paymentStatus = computePaymentStatus({
-      amount,
-      payable: amount,
-      dueDay: sub.renewalDay,
-      currentDay,
+    let payable = decimalToNumber(sub.payableAmount);
+    const storedStatus = sub.paymentStatus;
+    if (payable <= 0 && storedStatus !== "PAID" && amount > 0) {
+      payable = amount;
+    }
+    const paymentStatus = resolveDisplayStatus({
+      stored: sub.paymentStatus,
+      payable,
     });
     const meta = getStatusMeta(paymentStatus);
     return {
       id: sub.id,
       name: sub.name,
       amount,
-      payable: amount,
+      payable,
       paymentStatus,
       statusLabel: meta.label,
       statusColor: meta.color,
-      beforeSalary: sub.renewalDay ? isBeforeSalary(sub.renewalDay, salaryDay) : false,
+      beforeSalary: isBeforeSalary(sub.renewalDay ?? salaryDay, salaryDay),
       emiDate: sub.renewalDay ?? undefined,
     };
   });
@@ -431,7 +474,10 @@ export async function getExcelMonthlyPlan(
   const homeTotal = homeItems.reduce((s, h) => s + h.amount, 0);
   const homePayable = homeItems.reduce((s, h) => s + h.payable, 0);
   const savingsTotal = planSavingsRows.reduce((s, sv) => s + sv.amount, 0);
-  const savingsPayableFromGoals = planSavingsRows.reduce((s, sv) => s + sv.payable, 0);
+  const savingsPayableFromGoals = [...planSavingsRows, ...loggedSavingsRows].reduce(
+    (s, sv) => s + sv.payable,
+    0
+  );
   const savingsRemainingToSave = Math.max(0, savingsTotal - actualSavingsTotal);
   const savingsPayable = Math.max(savingsPayableFromGoals, savingsRemainingToSave);
   const fixedTotal = fixedItems.reduce((s, f) => s + f.amount, 0);
@@ -463,6 +509,7 @@ export async function getExcelMonthlyPlan(
   const salaryBreakdown = {
     incomeReceived,
     salaryReceived,
+    planIncome,
     emi: loanEmi,
     homeExpense: homeTotal,
     fixedExpense: fixedTotal,
@@ -490,12 +537,12 @@ export async function getExcelMonthlyPlan(
   };
 
   const beforeSalary = {
-    loan: loanItems.filter((l) => l.beforeSalary).reduce((s, l) => s + l.payable, 0),
-    home: homeItems.filter((h) => h.beforeSalary).reduce((s, h) => s + h.payable, 0),
-    savings: planSavingsRows.filter((s) => s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
-    fixed: fixedItems.filter((f) => f.beforeSalary).reduce((s, f) => s + f.payable, 0),
-    subscriptions: subItems.filter((s) => s.beforeSalary).reduce((s, sub) => s + sub.payable, 0),
-    insurance: insuranceItems.filter((i) => i.beforeSalary).reduce((s, ins) => s + ins.payable, 0),
+    loan: loanItems.filter((l) => l.beforeSalary).reduce((s, l) => s + amountForSalarySplit(l), 0),
+    home: homeItems.filter((h) => h.beforeSalary).reduce((s, h) => s + amountForSalarySplit(h), 0),
+    savings: allSavingsRows.filter((s) => s.beforeSalary).reduce((s, sv) => s + amountForSalarySplit(sv), 0),
+    fixed: fixedItems.filter((f) => f.beforeSalary).reduce((s, f) => s + amountForSalarySplit(f), 0),
+    subscriptions: subItems.filter((s) => s.beforeSalary).reduce((s, sub) => s + amountForSalarySplit(sub), 0),
+    insurance: insuranceItems.filter((i) => i.beforeSalary).reduce((s, ins) => s + amountForSalarySplit(ins), 0),
     total: 0,
   };
   beforeSalary.total =
@@ -503,12 +550,12 @@ export async function getExcelMonthlyPlan(
     beforeSalary.fixed + beforeSalary.subscriptions + beforeSalary.insurance;
 
   const afterSalary = {
-    loan: loanItems.filter((l) => !l.beforeSalary).reduce((s, l) => s + l.payable, 0),
-    home: homeItems.filter((h) => !h.beforeSalary).reduce((s, h) => s + h.payable, 0),
-    savings: planSavingsRows.filter((s) => !s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
-    fixed: fixedItems.filter((f) => !f.beforeSalary).reduce((s, f) => s + f.payable, 0),
-    subscriptions: subItems.filter((s) => !s.beforeSalary).reduce((s, sub) => s + sub.payable, 0),
-    insurance: insuranceItems.filter((i) => !i.beforeSalary).reduce((s, ins) => s + ins.payable, 0),
+    loan: loanItems.filter((l) => !l.beforeSalary).reduce((s, l) => s + amountForSalarySplit(l), 0),
+    home: homeItems.filter((h) => !h.beforeSalary).reduce((s, h) => s + amountForSalarySplit(h), 0),
+    savings: allSavingsRows.filter((s) => !s.beforeSalary).reduce((s, sv) => s + amountForSalarySplit(sv), 0),
+    fixed: fixedItems.filter((f) => !f.beforeSalary).reduce((s, f) => s + amountForSalarySplit(f), 0),
+    subscriptions: subItems.filter((s) => !s.beforeSalary).reduce((s, sub) => s + amountForSalarySplit(sub), 0),
+    insurance: insuranceItems.filter((i) => !i.beforeSalary).reduce((s, ins) => s + amountForSalarySplit(ins), 0),
     total: 0,
   };
   afterSalary.total =
@@ -656,7 +703,7 @@ function generateInsights(params: {
 
 export async function markItemPaid(
   userId: string,
-  type: "loan" | "home" | "saving" | "insurance" | "income",
+  type: "loan" | "home" | "saving" | "insurance" | "income" | "subscription",
   id: string
 ) {
   if (type === "income") {
@@ -671,7 +718,22 @@ export async function markItemPaid(
   if (type === "insurance") {
     return updateForUser("insurance", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
   }
-  return updateForUser("saving", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+  if (type === "subscription") {
+    return updateForUser("subscription", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+  }
+  if (type === "saving") {
+    const plan = await updateForUser("saving", userId, id, {
+      payableAmount: 0,
+      paymentStatus: "PAID",
+      isPayable: false,
+    });
+    if (plan) return plan;
+    return updateForUser("savingEntry", userId, id, {
+      payableAmount: 0,
+      paymentStatus: "PAID",
+    });
+  }
+  return null;
 }
 
 export type PlanItemType =
@@ -760,10 +822,20 @@ export async function updatePlanItem(
       return result;
     }
     case "subscription": {
+      const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+      const amount = Number(data.amount) || 0;
+      let payableAmount =
+        data.payableAmount !== undefined ? Number(data.payableAmount) : amount;
+      if (paymentStatus === "PAID") payableAmount = 0;
+      else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
+
       const result = await updateForUser("subscription", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
-        ...(data.amount !== undefined && { amount: Number(data.amount) }),
+        ...(data.amount !== undefined && { amount }),
+        payableAmount,
         ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
+        ...(paymentStatus !== undefined && { paymentStatus }),
+        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
       if (!result) throw new Error("Item not found");
       return result;
@@ -884,6 +956,8 @@ export async function createPlanItem(
             userId,
             name,
             amount,
+            payableAmount,
+            paymentStatus,
             renewalDay: Number(data.renewalDay) || 1,
             isActive: true,
           },

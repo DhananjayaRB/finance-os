@@ -45,8 +45,11 @@ function SalaryBreakdownCard({
 }: {
   breakdown: ExcelMonthlyPlan["salaryBreakdown"];
 }) {
-  const base = breakdown.salaryReceived > 0 ? breakdown.salaryReceived : breakdown.incomeReceived;
-  if (base <= 0) return null;
+  const base =
+    breakdown.salaryReceived ||
+    breakdown.incomeReceived ||
+    breakdown.planIncome ||
+    0;
 
   const expenseTotal =
     breakdown.homeExpense + breakdown.fixedExpense + breakdown.otherExpenses;
@@ -60,7 +63,10 @@ function SalaryBreakdownCard({
   ].filter((r) => r.amount > 0);
 
   const spentFromSalary = rows.reduce((s, r) => s + r.amount, 0);
-  const remaining = base - spentFromSalary;
+  if (base <= 0 && spentFromSalary <= 0) return null;
+
+  const displayBase = base > 0 ? base : spentFromSalary;
+  const remaining = base > 0 ? base - spentFromSalary : 0;
 
   return (
     <Card>
@@ -68,12 +74,16 @@ function SalaryBreakdownCard({
         <div className="border-b bg-violet-600 px-3 py-2">
           <p className="text-sm font-semibold text-white">How I Spent This Month</p>
           <p className="text-xs text-violet-100">
-            Salary received: {formatCurrency(breakdown.salaryReceived || breakdown.incomeReceived)}
+            {breakdown.salaryReceived > 0
+              ? `Salary received: ${formatCurrency(breakdown.salaryReceived)}`
+              : breakdown.incomeReceived > 0
+                ? `Income received: ${formatCurrency(breakdown.incomeReceived)}`
+                : `Plan income: ${formatCurrency(breakdown.planIncome)}`}
           </p>
         </div>
         <div className="space-y-3 p-3">
           {rows.map((row) => {
-            const pct = Math.min(100, Math.round((row.amount / base) * 100));
+            const pct = Math.min(100, Math.round((row.amount / displayBase) * 100));
             return (
               <div key={row.label}>
                 <div className="mb-1 flex items-center justify-between text-xs">
@@ -123,7 +133,7 @@ function PlanTable({
   title: string;
   headers: string[];
   rows: ExcelPlanItem[];
-  onMarkPaid?: (type: "loan" | "home" | "saving" | "insurance" | "income", id: string) => void;
+  onMarkPaid?: (type: "loan" | "home" | "saving" | "insurance" | "income" | "subscription", id: string) => void;
   onEdit?: (type: PlanItemType, item: ExcelPlanItem) => void;
   onDelete?: (type: PlanItemType, id: string, row: ExcelPlanItem) => void;
   onAdd?: () => void;
@@ -199,7 +209,7 @@ function PlanTable({
                         {formatCurrency(row.payable)}
                       </td>
                     </>
-                  ) : type === "home" || type === "saving" || type === "insurance" ? (
+                  ) : type === "home" || type === "saving" || type === "insurance" || type === "subscription" ? (
                     <>
                       <td className="px-2 py-2 text-right">{formatCurrency(row.amount)}</td>
                       <td className={cn("px-2 py-2 text-right font-medium", row.payable > 0 ? "text-red-600" : "text-emerald-600")}>
@@ -235,8 +245,8 @@ function PlanTable({
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving" || type === "insurance" || type === "income") && (
-                        (type === "income" ? !row.isReceived : type === "saving" && row.savingSource === "entry" ? false : row.payable > 0) && (
+                      {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving" || type === "insurance" || type === "income" || type === "subscription") && (
+                        (type === "income" ? !row.isReceived : row.payable > 0) && (
                         <button
                           type="button"
                           onClick={() => onMarkPaid(type, row.id)}
@@ -316,7 +326,7 @@ export default function PlanPage() {
     setYear(y);
   };
 
-  const markPaid = async (type: "loan" | "home" | "saving" | "insurance" | "income", id: string) => {
+  const markPaid = async (type: "loan" | "home" | "saving" | "insurance" | "income" | "subscription", id: string) => {
     await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -340,6 +350,9 @@ export default function PlanPage() {
           name: payload.name,
           amount: payload.amount,
           type: payload.savingType,
+          payableAmount: payload.payableAmount,
+          paymentStatus: payload.paymentStatus,
+          dueDay: payload.dueDay,
         }),
       });
       if (!res.ok) {
@@ -674,7 +687,9 @@ export default function PlanPage() {
             <Card>
               <CardContent className="p-0">
                 <div className="border-b bg-orange-500 px-3 py-2">
-                  <p className="text-sm font-semibold text-white">Before / After Salary ({data.salaryDay}th)</p>
+                  <p className="text-sm font-semibold text-white">
+                    Before / After Salary ({data.salaryDay}th) — planned amounts by due date
+                  </p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -717,6 +732,7 @@ export default function PlanPage() {
               </CardContent>
             </Card>
 
+            {data.monthlyFixedExpenses.length > 0 && (
             <Card>
               <CardContent className="p-0">
                 <div className="border-b bg-teal-600 px-3 py-2">
@@ -768,11 +784,13 @@ export default function PlanPage() {
                 </table>
               </CardContent>
             </Card>
+            )}
 
             <PlanTable
               title={`Subscriptions — Total: ${formatCurrency(t?.subscriptionTotal ?? 0)} | Payable: ${formatCurrency(t?.subscriptionPayable ?? 0)}`}
-              headers={["Name", "Amount", "Status"]}
+              headers={["Name", "Amount", "Payable", "Status"]}
               rows={data.subscriptions}
+              onMarkPaid={markPaid}
               onEdit={openEdit}
               onDelete={handleDelete}
               type="subscription"

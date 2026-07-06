@@ -324,18 +324,20 @@ model FixedExpense {
 }
 
 model Subscription {
-  id           String            @id @default(cuid())
-  userId       String
-  name         String
-  amount       Decimal           @db.Decimal(14, 2)
-  cycle        SubscriptionCycle @default(MONTHLY)
-  renewalDay   Int?
-  autoDebit    Boolean           @default(true)
-  cardUsed     String?
-  isActive     Boolean           @default(true)
-  notes        String?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  id            String            @id @default(cuid())
+  userId        String
+  name          String
+  amount        Decimal           @db.Decimal(14, 2)
+  payableAmount Decimal           @default(0) @db.Decimal(14, 2)
+  paymentStatus PaymentStatus     @default(PENDING)
+  cycle         SubscriptionCycle @default(MONTHLY)
+  renewalDay    Int?
+  autoDebit     Boolean           @default(true)
+  cardUsed      String?
+  isActive      Boolean           @default(true)
+  notes         String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -362,17 +364,20 @@ model Saving {
 }
 
 model SavingEntry {
-  id        String     @id @default(cuid())
-  userId    String
-  name      String
-  type      SavingType @default(SIP)
-  amount    Decimal    @db.Decimal(14, 2)
-  date      DateTime   @default(now())
-  month     Int
-  year      Int
-  notes     String?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  id            String        @id @default(cuid())
+  userId        String
+  name          String
+  type          SavingType    @default(SIP)
+  amount        Decimal       @db.Decimal(14, 2)
+  payableAmount Decimal       @default(0) @db.Decimal(14, 2)
+  paymentStatus PaymentStatus @default(PAID)
+  dueDay        Int?
+  date          DateTime      @default(now())
+  month         Int
+  year          Int
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
