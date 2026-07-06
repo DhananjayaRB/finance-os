@@ -24,6 +24,7 @@ export interface ExcelPlanItem {
   incomeType?: string;
   insuranceType?: string;
   savingType?: string;
+  isReceived?: boolean;
   category?: string;
 }
 
@@ -320,19 +321,24 @@ export async function getExcelMonthlyPlan(
   const fixedItems = monthlyFixed.map((f) => mapFixedExpense(f, salaryDay, currentDay));
   const savingItems = savings.map((s) => mapSaving(s, salaryDay, currentDay));
 
-  const incomeSources: ExcelPlanItem[] = incomes.map((inc) => ({
-    id: inc.id,
-    name: inc.source,
-    amount: decimalToNumber(inc.amount),
-    payable: 0,
-    paymentStatus: decimalToNumber(inc.amount) > 0 ? "PAID" : "PENDING",
-    statusLabel: decimalToNumber(inc.amount) > 0 ? "Received" : "Pending",
-    statusColor: decimalToNumber(inc.amount) > 0
-      ? "bg-emerald-100 text-emerald-800"
-      : "bg-zinc-100 text-zinc-700",
-    beforeSalary: false,
-    incomeType: inc.incomeType,
-  }));
+  const incomeSources: ExcelPlanItem[] = incomes.map((inc) => {
+    const amount = decimalToNumber(inc.amount);
+    const received = inc.isReceived;
+    return {
+      id: inc.id,
+      name: inc.source,
+      amount,
+      payable: 0,
+      paymentStatus: received ? "PAID" : "PENDING",
+      statusLabel: received ? "Received" : "Not Received",
+      statusColor: received
+        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+        : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+      beforeSalary: false,
+      incomeType: inc.incomeType,
+      isReceived: received,
+    };
+  });
 
   const subItems: ExcelPlanItem[] = subscriptions.map((sub) => {
     const amount = decimalToNumber(sub.amount);
@@ -578,9 +584,12 @@ function generateInsights(params: {
 
 export async function markItemPaid(
   userId: string,
-  type: "loan" | "home" | "saving" | "insurance",
+  type: "loan" | "home" | "saving" | "insurance" | "income",
   id: string
 ) {
+  if (type === "income") {
+    return updateForUser("income", userId, id, { isReceived: true });
+  }
   if (type === "loan") {
     return updateForUser("loan", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
   }
@@ -669,6 +678,7 @@ export async function updatePlanItem(
         ...(data.incomeType !== undefined && {
           incomeType: data.incomeType as "SALARY" | "HDFC" | "CANARA" | "GOLD" | "PF" | "OTHER",
         }),
+        ...(data.isReceived !== undefined && { isReceived: Boolean(data.isReceived) }),
       });
       if (!result) throw new Error("Item not found");
       return result;
@@ -784,6 +794,7 @@ export async function createPlanItem(
             source: name,
             amount,
             incomeType: (data.incomeType as "SALARY" | "OTHER") || "OTHER",
+            isReceived: data.isReceived !== undefined ? Boolean(data.isReceived) : false,
             month,
             year,
             date,

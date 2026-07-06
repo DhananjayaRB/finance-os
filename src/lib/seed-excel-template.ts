@@ -88,6 +88,7 @@ export async function seedExcelTemplate(userId: string, month: number, year: num
         month,
         year,
         isRecurring: inc.isRecurring,
+        isReceived: inc.incomeType !== "SALARY",
       },
     });
   }

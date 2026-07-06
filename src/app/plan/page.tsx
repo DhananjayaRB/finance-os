@@ -55,7 +55,7 @@ function PlanTable({
   title: string;
   headers: string[];
   rows: ExcelPlanItem[];
-  onMarkPaid?: (type: "loan" | "home" | "saving" | "insurance", id: string) => void;
+  onMarkPaid?: (type: "loan" | "home" | "saving" | "insurance" | "income", id: string) => void;
   onEdit?: (type: PlanItemType, item: ExcelPlanItem) => void;
   onDelete?: (type: PlanItemType, id: string) => void;
   onAdd?: () => void;
@@ -167,14 +167,16 @@ function PlanTable({
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving" || type === "insurance") && row.payable > 0 && (
+                      {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving" || type === "insurance" || type === "income") && (
+                        (type === "income" ? !row.isReceived : row.payable > 0) && (
                         <button
                           type="button"
                           onClick={() => onMarkPaid(type, row.id)}
                           className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] text-white"
                         >
-                          Paid
+                          {type === "income" ? "Received" : "Paid"}
                         </button>
+                        )
                       )}
                     </div>
                   </td>
@@ -246,7 +248,7 @@ export default function PlanPage() {
     setYear(y);
   };
 
-  const markPaid = async (type: "loan" | "home" | "saving" | "insurance", id: string) => {
+  const markPaid = async (type: "loan" | "home" | "saving" | "insurance" | "income", id: string) => {
     await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -468,13 +470,31 @@ export default function PlanPage() {
                         <td className="px-2 py-2 text-right text-emerald-600">{formatCurrency(inc.amount)}</td>
                         <td className="px-2 py-2"><StatusBadge item={inc} /></td>
                         <td className="px-2 py-2">
-                          <button
-                            type="button"
-                            onClick={() => openEdit("income", inc)}
-                            className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="flex justify-end gap-1">
+                            {!inc.isReceived && (
+                              <button
+                                type="button"
+                                onClick={() => markPaid("income", inc.id)}
+                                className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] text-white"
+                              >
+                                Received
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => openEdit("income", inc)}
+                              className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete("income", inc.id)}
+                              className="rounded-lg p-1.5 text-zinc-500 hover:bg-red-50 hover:text-red-600"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

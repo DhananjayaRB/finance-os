@@ -1,9 +1,9 @@
-import { PrismaClient, Prisma } from "@/generated/prisma/client";
+import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 
 /** Bump when Prisma schema changes (also triggers delegate re-check). */
-const PRISMA_SCHEMA_VERSION = 6;
+const PRISMA_SCHEMA_VERSION = 7;
 
 const REQUIRED_DELEGATES = [
   "savingEntry",
@@ -27,14 +27,9 @@ const DELEGATE_CHECKS: Record<(typeof REQUIRED_DELEGATES)[number], "findMany" | 
 
 function isPrismaClientStale(client: PrismaClient): boolean {
   const d = client as unknown as Record<string, PrismaDelegate | undefined>;
-  const missingDelegate = REQUIRED_DELEGATES.some(
+  return REQUIRED_DELEGATES.some(
     (name) => typeof d[name]?.[DELEGATE_CHECKS[name]] !== "function"
   );
-
-  const loanModel = Prisma.dmmf.datamodel.models.find((m) => m.name === "Loan");
-  const missingLoanFields = !loanModel?.fields.some((f) => f.name === "payableAmount");
-
-  return missingDelegate || missingLoanFields;
 }
 
 function prismaStaleMessage(): string {

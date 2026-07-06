@@ -99,6 +99,7 @@ export async function PUT(request: NextRequest) {
   if (rest.amount !== undefined) data.amount = Number(rest.amount);
   if (rest.incomeType !== undefined) data.incomeType = rest.incomeType;
   if (rest.isRecurring !== undefined) data.isRecurring = Boolean(rest.isRecurring);
+  if (rest.isReceived !== undefined) data.isReceived = Boolean(rest.isReceived);
   if (rest.notes !== undefined) data.notes = rest.notes || null;
   if (rest.date !== undefined) {
     const d = new Date(rest.date);

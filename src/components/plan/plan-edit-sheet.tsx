@@ -28,8 +28,11 @@ interface PlanEditSheetProps {
   ) => Promise<boolean>;
 }
 
-function buildFormFromContext(context: EditContext): Record<string, string> {
+type PlanFormState = Record<string, string>;
+
+function buildFormFromContext(context: EditContext): PlanFormState {
   const { item } = context;
+  const received = item.isReceived ?? item.paymentStatus === "PAID";
   return {
     name: item.name,
     amount: String(item.amount || ""),
@@ -43,6 +46,7 @@ function buildFormFromContext(context: EditContext): Record<string, string> {
     incomeType: item.incomeType ?? "OTHER",
     insuranceType: item.insuranceType ?? "MEDICAL",
     savingType: item.savingType ?? "SIP",
+    isReceived: received ? "true" : "false",
     dueDay: String(item.emiDate ?? ""),
     renewalDay: String(item.emiDate ?? ""),
   };
@@ -60,7 +64,7 @@ function PlanEditForm({
   const { type, item, isNew } = context;
   const nameRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState(() => buildFormFromContext(context));
+  const [form, setForm] = useState<PlanFormState>(() => buildFormFromContext(context));
 
   useEffect(() => {
     const timer = window.setTimeout(() => nameRef.current?.focus(), 50);
@@ -83,7 +87,7 @@ function PlanEditForm({
 
   const handleStatusChange = (status: string) => {
     setForm((f) => {
-      const next = { ...f, paymentStatus: status };
+      const next: PlanFormState = { ...f, paymentStatus: status };
       if (status === "PAID") {
         next.payableAmount = "0";
       } else if (status !== "CLOSED" && (parseFloat(f.payableAmount) || 0) <= 0) {
@@ -127,6 +131,7 @@ function PlanEditForm({
       } else if (type === "income") {
         payload.amount = amount;
         payload.incomeType = form.incomeType;
+        payload.isReceived = form.isReceived === "true";
       } else if (type === "subscription") {
         payload.amount = amount;
         payload.renewalDay = parseInt(form.renewalDay) || 1;
@@ -271,18 +276,31 @@ function PlanEditForm({
           )}
 
           {type === "income" && (
-            <div>
-              <Label>Income Type</Label>
-              <select
-                value={form.incomeType}
-                onChange={(e) => set("incomeType", e.target.value)}
-                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
-              >
-                {Object.entries(INCOME_TYPE_LABELS).map(([k, v]) => (
-                  <option key={k} value={k}>{v}</option>
-                ))}
-              </select>
-            </div>
+            <>
+              <div>
+                <Label>Income Type</Label>
+                <select
+                  value={form.incomeType}
+                  onChange={(e) => set("incomeType", e.target.value)}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+                >
+                  {Object.entries(INCOME_TYPE_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <Label>Status</Label>
+                <select
+                  value={form.isReceived}
+                  onChange={(e) => set("isReceived", e.target.value)}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+                >
+                  <option value="true">Received — credited this month</option>
+                  <option value="false">Not Received — still expecting</option>
+                </select>
+              </div>
+            </>
           )}
 
           {(type === "loan" || type === "home" || type === "saving" || type === "insurance") && (
