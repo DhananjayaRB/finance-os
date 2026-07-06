@@ -118,9 +118,11 @@ function PlanEditForm({
         payload.paymentStatus = form.paymentStatus;
         payload.loanType = form.loanType;
       } else if (type === "home" || type === "saving" || type === "insurance" || type === "subscription") {
-        payload.payableAmount =
-          form.paymentStatus === "PAID" ? 0 : payableAmount;
-        payload.paymentStatus = form.paymentStatus;
+        if (!(type === "saving" && context.item.savingKind === "DEPOSIT")) {
+          payload.payableAmount =
+            form.paymentStatus === "PAID" ? 0 : payableAmount;
+          payload.paymentStatus = form.paymentStatus;
+        }
         if (type === "home" || type === "insurance") {
           payload.dueDay = parseInt(form.dueDay) || 1;
         }
@@ -237,7 +239,7 @@ function PlanEditForm({
             </div>
           )}
 
-          {(type === "loan" || type === "home" || type === "saving" || type === "insurance" || type === "subscription") && (
+          {(type === "loan" || type === "home" || (type === "saving" && context.item.savingKind !== "DEPOSIT") || type === "insurance" || type === "subscription") && (
             <div>
               <Label>Payable ₹ (amount still due)</Label>
               <Input
@@ -306,7 +308,7 @@ function PlanEditForm({
             </>
           )}
 
-          {(type === "loan" || type === "home" || type === "saving" || type === "insurance" || type === "subscription") && (
+          {(type === "loan" || type === "home" || (type === "saving" && context.item.savingKind !== "DEPOSIT") || type === "insurance" || type === "subscription") && (
             <div>
               <Label>Payment Status</Label>
               <select

@@ -4,9 +4,22 @@ import prisma from "@/lib/db";
 import { jsonOk, jsonError } from "@/lib/api-utils";
 import { updateForUser, deleteForUser } from "@/lib/prisma-helpers";
 import { decimalToNumber } from "@/lib/utils";
-import type { SavingType } from "@/generated/prisma/client";
+import type { SavingEntryKind, SavingType } from "@/generated/prisma/client";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function netFromEntries(entries: { kind: string; amount: string | number | { toNumber?: () => number } }[]) {
+  let deposited = 0;
+  let withdrawn = 0;
+  let missed = 0;
+  for (const e of entries) {
+    const amt = decimalToNumber(e.amount);
+    if (e.kind === "WITHDRAWAL") withdrawn += amt;
+    else if (e.kind === "MISSED") missed += amt;
+    else deposited += amt;
+  }
+  return { deposited, withdrawn, missed, net: deposited - withdrawn };
+}
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -29,7 +42,7 @@ export async function GET(request: NextRequest) {
       }),
       prisma.savingEntry.findMany({
         where: { userId: session.userId },
-        select: { amount: true, type: true },
+        select: { kind: true, amount: true },
       }),
     ]);
 
@@ -38,36 +51,39 @@ export async function GET(request: NextRequest) {
       amount: decimalToNumber(e.amount),
     }));
 
-    const monthTotal = serialized.reduce((s, e) => s + e.amount, 0);
+    const monthStats = netFromEntries(entries);
+    const yearStats = netFromEntries(yearEntries);
+    const allTimeStats = netFromEntries(allEntries);
 
     const yearByMonth = Array.from({ length: 12 }, (_, i) => {
       const m = i + 1;
-      const total = yearEntries
-        .filter((e) => e.month === m)
-        .reduce((s, e) => s + decimalToNumber(e.amount), 0);
+      const monthEntries = yearEntries.filter((e) => e.month === m);
+      const total = netFromEntries(monthEntries).net;
       return { month: m, label: MONTHS[i], total };
     });
 
-    const yearTotal = yearByMonth.reduce((s, m) => s + m.total, 0);
-
     const byTypeMap: Record<string, number> = {};
     for (const e of yearEntries) {
-      const key = e.type;
-      byTypeMap[key] = (byTypeMap[key] || 0) + decimalToNumber(e.amount);
+      const amt = decimalToNumber(e.amount);
+      const signed =
+        e.kind === "WITHDRAWAL" ? -amt : e.kind === "MISSED" ? 0 : amt;
+      if (signed === 0) continue;
+      byTypeMap[e.type] = (byTypeMap[e.type] || 0) + signed;
     }
     const byType = Object.entries(byTypeMap)
       .map(([type, total]) => ({ type, total }))
       .sort((a, b) => b.total - a.total);
 
-    const allTimeTotal = allEntries.reduce((s, e) => s + decimalToNumber(e.amount), 0);
-
     return jsonOk({
       entries: serialized,
       month,
       year,
-      monthTotal,
-      yearTotal,
-      allTimeTotal,
+      monthTotal: monthStats.net,
+      monthDeposited: monthStats.deposited,
+      monthWithdrawn: monthStats.withdrawn,
+      monthMissed: monthStats.missed,
+      yearTotal: yearStats.net,
+      allTimeTotal: allTimeStats.net,
       yearByMonth,
       byType,
     });
@@ -96,14 +112,24 @@ export async function POST(request: NextRequest) {
     const month = body.month ?? date.getMonth() + 1;
     const year = body.year ?? date.getFullYear();
 
+    const kind = (body.kind || "DEPOSIT") as SavingEntryKind;
+    const paymentStatus =
+      kind === "DEPOSIT"
+        ? ((body.paymentStatus || "PAID") as "PAID" | "PENDING" | "DUE" | "OVERDUE" | "CLOSED")
+        : "PAID";
+
     const entry = await prisma.savingEntry.create({
       data: {
         userId: session.userId,
         name,
         type: (body.type || "SIP") as SavingType,
+        kind,
         amount,
-        payableAmount: body.payableAmount !== undefined ? Number(body.payableAmount) : 0,
-        paymentStatus: (body.paymentStatus || "PAID") as "PAID" | "PENDING" | "DUE" | "OVERDUE" | "CLOSED",
+        payableAmount:
+          kind === "DEPOSIT" && body.payableAmount !== undefined
+            ? Number(body.payableAmount)
+            : 0,
+        paymentStatus,
         dueDay: body.dueDay !== undefined ? Number(body.dueDay) : date.getDate(),
         date,
         month,
@@ -130,12 +156,26 @@ export async function PUT(request: NextRequest) {
   const { id, ...rest } = body;
   if (!id) return jsonError("ID required");
 
+  const existing = await prisma.savingEntry.findFirst({
+    where: { id, userId: session.userId },
+    select: { kind: true },
+  });
+  if (!existing) return jsonError("Savings entry not found", 404);
+
   const data: Record<string, unknown> = {};
   if (rest.name !== undefined) data.name = String(rest.name).trim();
   if (rest.type !== undefined) data.type = rest.type;
+  if (rest.kind !== undefined) data.kind = rest.kind;
   if (rest.amount !== undefined) data.amount = Number(rest.amount);
-  if (rest.payableAmount !== undefined) data.payableAmount = Number(rest.payableAmount);
-  if (rest.paymentStatus !== undefined) data.paymentStatus = rest.paymentStatus;
+
+  const effectiveKind = (rest.kind as string) || existing.kind;
+  if (effectiveKind === "DEPOSIT") {
+    data.payableAmount = 0;
+    data.paymentStatus = "PAID";
+  } else {
+    if (rest.payableAmount !== undefined) data.payableAmount = Number(rest.payableAmount);
+    if (rest.paymentStatus !== undefined) data.paymentStatus = rest.paymentStatus;
+  }
   if (rest.dueDay !== undefined) data.dueDay = Number(rest.dueDay);
   if (rest.notes !== undefined) data.notes = rest.notes || null;
   if (rest.date !== undefined) {

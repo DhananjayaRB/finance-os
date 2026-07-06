@@ -11,10 +11,17 @@ import { SAVING_TYPES, getSavingTypeIcon, getSavingTypeLabel } from "@/lib/const
 import { formatCurrency, cn } from "@/lib/utils";
 import { Plus, Trash2, ChevronLeft, ChevronRight, Pencil, X, PiggyBank } from "lucide-react";
 
+interface MonthBreakdown {
+  month: number;
+  label: string;
+  total: number;
+}
+
 interface SavingEntry {
   id: string;
   name: string;
   type: string;
+  kind: string;
   amount: number;
   date: string;
   month: number;
@@ -22,20 +29,23 @@ interface SavingEntry {
   notes: string | null;
 }
 
-interface MonthBreakdown {
-  month: number;
-  label: string;
-  total: number;
-}
-
 interface SavingsData {
   entries: SavingEntry[];
   monthTotal: number;
+  monthDeposited?: number;
+  monthWithdrawn?: number;
+  monthMissed?: number;
   yearTotal: number;
   allTimeTotal: number;
   yearByMonth: MonthBreakdown[];
   byType: { type: string; total: number }[];
 }
+
+const SAVING_KINDS = [
+  { value: "DEPOSIT", label: "Deposit — money saved" },
+  { value: "WITHDRAWAL", label: "Withdrawal — money taken out" },
+  { value: "MISSED", label: "Missed — planned but not saved" },
+] as const;
 
 function EditSheet({
   entry,
@@ -63,6 +73,7 @@ function EditSheet({
         id: entry.id,
         name: form.get("name"),
         type: form.get("type"),
+        kind: form.get("kind"),
         amount: parseFloat(form.get("amount") as string),
         date: form.get("date"),
         notes: form.get("notes"),
@@ -90,6 +101,14 @@ function EditSheet({
           <div>
             <Label>Name</Label>
             <Input name="name" defaultValue={entry.name} required />
+          </div>
+          <div>
+            <Label>Activity</Label>
+            <select name="kind" defaultValue={entry.kind || "DEPOSIT"} className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900">
+              {SAVING_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>{k.label}</option>
+              ))}
+            </select>
           </div>
           <div>
             <Label>Type</Label>
@@ -179,6 +198,7 @@ export default function SavingsPage() {
         amount: parseFloat(form.get("amount") as string),
         date: form.get("date"),
         notes: form.get("notes"),
+        kind: form.get("kind") || "DEPOSIT",
         month,
         year,
       }),
@@ -226,13 +246,34 @@ export default function SavingsPage() {
           </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Card>
             <CardContent className="p-3 text-center">
-              <p className="text-[10px] text-zinc-500">This Month</p>
+              <p className="text-[10px] text-zinc-500">Net Saved</p>
               <p className="text-sm font-bold text-emerald-600">{formatCurrency(data?.monthTotal ?? 0)}</p>
             </CardContent>
           </Card>
+          <Card>
+            <CardContent className="p-3 text-center">
+              <p className="text-[10px] text-zinc-500">Deposited</p>
+              <p className="text-sm font-bold">{formatCurrency(data?.monthDeposited ?? 0)}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-3 text-center">
+              <p className="text-[10px] text-zinc-500">Withdrawn</p>
+              <p className="text-sm font-bold text-rose-600">{formatCurrency(data?.monthWithdrawn ?? 0)}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-3 text-center">
+              <p className="text-[10px] text-zinc-500">Missed</p>
+              <p className="text-sm font-bold text-amber-600">{formatCurrency(data?.monthMissed ?? 0)}</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
           <Card>
             <CardContent className="p-3 text-center">
               <p className="text-[10px] text-zinc-500">{year} Total</p>
@@ -248,15 +289,24 @@ export default function SavingsPage() {
         </div>
 
         <Button className="w-full" onClick={() => setShowForm(true)}>
-          <Plus className="mr-2 h-4 w-4" /> Add Savings for {new Date(year, month - 1).toLocaleString("en-IN", { month: "short" })}
+          <Plus className="mr-2 h-4 w-4" /> Add Deposit / Withdrawal / Missed
         </Button>
 
         {showForm && (
           <Card className="border-emerald-200">
             <CardContent className="space-y-3 p-4">
-              <p className="font-semibold">Log Savings</p>
+              <p className="font-semibold">Log Savings Activity</p>
               <form onSubmit={handleSave} className="space-y-3">
-                <Input name="name" placeholder="e.g. Gold, SIP, PF" required />
+                <select
+                  name="kind"
+                  defaultValue="DEPOSIT"
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+                >
+                  {SAVING_KINDS.map((k) => (
+                    <option key={k.value} value={k.value}>{k.label}</option>
+                  ))}
+                </select>
+                <Input name="name" placeholder="e.g. Rihsi RD, Gold SIP" required />
                 <select
                   name="type"
                   defaultValue="SIP"
@@ -351,13 +401,25 @@ export default function SavingsPage() {
                   <div>
                     <p className="font-medium">{entry.name}</p>
                     <p className="text-xs text-zinc-500">
-                      {getSavingTypeLabel(entry.type)} • {new Date(entry.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                      {entry.kind === "WITHDRAWAL" ? "Withdrawal" : entry.kind === "MISSED" ? "Missed" : "Deposit"} • {getSavingTypeLabel(entry.type)} • {new Date(entry.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
                     </p>
                     {entry.notes && <p className="text-xs text-zinc-400">{entry.notes}</p>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <p className="text-lg font-bold text-emerald-600">{formatCurrency(entry.amount)}</p>
+                  <p
+                    className={cn(
+                      "text-lg font-bold",
+                      entry.kind === "WITHDRAWAL"
+                        ? "text-rose-600"
+                        : entry.kind === "MISSED"
+                          ? "text-amber-600"
+                          : "text-emerald-600"
+                    )}
+                  >
+                    {entry.kind === "WITHDRAWAL" ? "−" : entry.kind === "MISSED" ? "" : ""}
+                    {formatCurrency(entry.amount)}
+                  </p>
                   <button type="button" onClick={() => setEditEntry(entry)} className="rounded-lg p-2 text-zinc-400 hover:text-zinc-600">
                     <Pencil className="h-4 w-4" />
                   </button>

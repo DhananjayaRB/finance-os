@@ -25,6 +25,7 @@ export interface ExcelPlanItem {
   insuranceType?: string;
   savingType?: string;
   savingSource?: "plan" | "entry";
+  savingKind?: "DEPOSIT" | "WITHDRAWAL" | "MISSED";
   isReceived?: boolean;
   category?: string;
 }
@@ -52,7 +53,17 @@ export interface ExcelMonthlyPlan {
   insurances: ExcelPlanItem[];
   actualSavings: {
     total: number;
-    entries: { id: string; name: string; type: string; amount: number; date: string }[];
+    deposited: number;
+    withdrawn: number;
+    missed: number;
+    entries: {
+      id: string;
+      name: string;
+      type: string;
+      kind: string;
+      amount: number;
+      date: string;
+    }[];
     byType: { type: string; total: number }[];
   };
   otherSpend: {
@@ -82,6 +93,11 @@ export interface ExcelMonthlyPlan {
     allPayable: number;
     totalRequired: number;
     balance: number;
+    savingsDeposited: number;
+    savingsWithdrawn: number;
+    savingsMissed: number;
+    savingsNetSaved: number;
+    savingsStillToSave: number;
     beforeSalary: {
       loan: number;
       home: number;
@@ -226,6 +242,7 @@ function mapSavingEntry(
     id: string;
     name: string;
     type: string;
+    kind: string;
     amount: unknown;
     payableAmount: unknown;
     paymentStatus: PaymentStatus;
@@ -235,29 +252,62 @@ function mapSavingEntry(
   salaryDay: number
 ): ExcelPlanItem {
   const amount = decimalToNumber(e.amount as string | number);
+  const kind = e.kind as "DEPOSIT" | "WITHDRAWAL" | "MISSED";
+  const dueDay = e.dueDay ?? e.date.getDate();
+
+  if (kind === "DEPOSIT") {
+    return {
+      id: e.id,
+      name: e.name,
+      amount,
+      payable: 0,
+      paymentStatus: "PAID",
+      statusLabel: "Logged",
+      statusColor: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+      beforeSalary: isBeforeSalary(dueDay, salaryDay),
+      savingType: e.type,
+      savingSource: "entry",
+      savingKind: kind,
+      emiDate: dueDay,
+    };
+  }
+
   let payable = decimalToNumber(e.payableAmount as string | number);
   const storedStatus = e.paymentStatus;
   if (payable <= 0 && storedStatus !== "PAID" && amount > 0) {
     payable = amount;
   }
-  const paymentStatus = resolveDisplayStatus({ stored: storedStatus, payable });
+  if (kind === "WITHDRAWAL" || kind === "MISSED") payable = 0;
+
+  const paymentStatus =
+    kind === "MISSED"
+      ? ("OVERDUE" as PaymentStatus)
+      : kind === "WITHDRAWAL"
+        ? ("PAID" as PaymentStatus)
+        : resolveDisplayStatus({ stored: storedStatus, payable });
   const meta = getStatusMeta(paymentStatus);
-  const dueDay = e.dueDay ?? e.date.getDate();
-  const isLoggedDeposit = storedStatus === "PAID" && payable <= 0;
+
+  const statusLabel =
+    kind === "WITHDRAWAL" ? "Withdrawn" : kind === "MISSED" ? "Missed" : meta.label;
+  const statusColor =
+    kind === "WITHDRAWAL"
+      ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
+      : kind === "MISSED"
+        ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+        : meta.color;
 
   return {
     id: e.id,
     name: e.name,
-    amount,
+    amount: kind === "WITHDRAWAL" ? -amount : amount,
     payable,
     paymentStatus,
-    statusLabel: isLoggedDeposit ? "Logged" : meta.label,
-    statusColor: isLoggedDeposit
-      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-      : meta.color,
+    statusLabel,
+    statusColor,
     beforeSalary: isBeforeSalary(dueDay, salaryDay),
     savingType: e.type,
     savingSource: "entry",
+    savingKind: kind,
     emiDate: dueDay,
   };
 }
@@ -440,10 +490,23 @@ export async function getExcelMonthlyPlan(
 
   const insuranceItems = insurances.map((ins) => mapInsurance(ins, salaryDay, currentDay));
 
-  const actualSavingsTotal = savingEntries.reduce((s, e) => s + decimalToNumber(e.amount), 0);
+  const savingsDeposited = savingEntries
+    .filter((e) => e.kind === "DEPOSIT")
+    .reduce((s, e) => s + decimalToNumber(e.amount), 0);
+  const savingsWithdrawn = savingEntries
+    .filter((e) => e.kind === "WITHDRAWAL")
+    .reduce((s, e) => s + decimalToNumber(e.amount), 0);
+  const savingsMissed = savingEntries
+    .filter((e) => e.kind === "MISSED")
+    .reduce((s, e) => s + decimalToNumber(e.amount), 0);
+  const actualSavingsTotal = savingsDeposited - savingsWithdrawn;
   const actualByTypeMap: Record<string, number> = {};
   for (const e of savingEntries) {
-    actualByTypeMap[e.type] = (actualByTypeMap[e.type] || 0) + decimalToNumber(e.amount);
+    const amt = decimalToNumber(e.amount);
+    const signed =
+      e.kind === "WITHDRAWAL" ? -amt : e.kind === "MISSED" ? 0 : amt;
+    if (signed === 0) continue;
+    actualByTypeMap[e.type] = (actualByTypeMap[e.type] || 0) + signed;
   }
   const actualSavingsByType = Object.entries(actualByTypeMap)
     .map(([type, total]) => ({ type, total }))
@@ -474,12 +537,13 @@ export async function getExcelMonthlyPlan(
   const homeTotal = homeItems.reduce((s, h) => s + h.amount, 0);
   const homePayable = homeItems.reduce((s, h) => s + h.payable, 0);
   const savingsTotal = planSavingsRows.reduce((s, sv) => s + sv.amount, 0);
-  const savingsPayableFromGoals = [...planSavingsRows, ...loggedSavingsRows].reduce(
-    (s, sv) => s + sv.payable,
-    0
+  const savingsPayableFromPlan = planSavingsRows.reduce((s, sv) => s + sv.payable, 0);
+  const savingsPayableFromEntries = loggedSavingsRows.reduce((s, sv) => s + sv.payable, 0);
+  const savingsRemainingToSave = Math.max(0, savingsTotal - savingsDeposited);
+  const savingsPayable = Math.max(
+    savingsPayableFromPlan + savingsPayableFromEntries,
+    savingsRemainingToSave
   );
-  const savingsRemainingToSave = Math.max(0, savingsTotal - actualSavingsTotal);
-  const savingsPayable = Math.max(savingsPayableFromGoals, savingsRemainingToSave);
   const fixedTotal = fixedItems.reduce((s, f) => s + f.amount, 0);
   const fixedPayable = fixedItems.reduce((s, f) => s + f.payable, 0);
   const subscriptionTotal = subItems.reduce((s, sub) => s + sub.amount, 0);
@@ -594,10 +658,14 @@ export async function getExcelMonthlyPlan(
     insurances: insuranceItems,
     actualSavings: {
       total: actualSavingsTotal,
+      deposited: savingsDeposited,
+      withdrawn: savingsWithdrawn,
+      missed: savingsMissed,
       entries: savingEntries.map((e) => ({
         id: e.id,
         name: e.name,
         type: e.type,
+        kind: e.kind,
         amount: decimalToNumber(e.amount),
         date: e.date.toISOString(),
       })),
@@ -629,6 +697,11 @@ export async function getExcelMonthlyPlan(
       allPayable,
       totalRequired,
       balance,
+      savingsDeposited,
+      savingsWithdrawn,
+      savingsMissed,
+      savingsNetSaved: actualSavingsTotal,
+      savingsStillToSave: savingsRemainingToSave,
       beforeSalary,
       afterSalary,
     },

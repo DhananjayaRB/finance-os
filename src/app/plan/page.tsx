@@ -528,21 +528,48 @@ export default function PlanPage() {
         ) : data ? (
           <>
             <Card className="border-2 border-emerald-500">
-              <CardContent className="grid grid-cols-3 gap-2 p-3 text-center text-xs">
-                <div>
-                  <p className="text-zinc-500">All Payable</p>
-                  <p className="text-lg font-bold text-red-600">{formatCurrency(t?.allPayable ?? 0)}</p>
+              <CardContent className="space-y-3 p-3 text-xs">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-zinc-500">All Payable</p>
+                    <p className="text-lg font-bold text-red-600">{formatCurrency(t?.allPayable ?? 0)}</p>
+                    <p className="mt-0.5 text-[10px] leading-tight text-zinc-400">Still unpaid across EMI, home, savings, subs &amp; insurance</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">Total Required</p>
+                    <p className="text-lg font-bold">{formatCurrency(t?.totalRequired ?? 0)}</p>
+                    <p className="mt-0.5 text-[10px] leading-tight text-zinc-400">Full monthly plan — all categories combined</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">Balance</p>
+                    <p className={cn("text-lg font-bold", (t?.balance ?? 0) >= 0 ? "text-emerald-600" : "text-red-600")}>
+                      {formatCurrency(t?.balance ?? 0)}
+                    </p>
+                    <p className="mt-0.5 text-[10px] leading-tight text-zinc-400">Plan income − required − other spend</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-zinc-500">Total Required</p>
-                  <p className="text-lg font-bold">{formatCurrency(t?.totalRequired ?? 0)}</p>
+                <div className="grid grid-cols-4 gap-2 border-t border-emerald-200 pt-3 text-center dark:border-emerald-900">
+                  <div>
+                    <p className="text-zinc-500">Saved (net)</p>
+                    <p className="text-base font-bold text-emerald-600">{formatCurrency(t?.savingsNetSaved ?? 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">Withdrawn</p>
+                    <p className="text-base font-bold text-rose-600">{formatCurrency(t?.savingsWithdrawn ?? 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">Missed</p>
+                    <p className="text-base font-bold text-amber-600">{formatCurrency(t?.savingsMissed ?? 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">Still to save</p>
+                    <p className="text-base font-bold text-violet-600">{formatCurrency(t?.savingsStillToSave ?? 0)}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-zinc-500">Balance</p>
-                  <p className={cn("text-lg font-bold", (t?.balance ?? 0) >= 0 ? "text-emerald-600" : "text-red-600")}>
-                    {formatCurrency(t?.balance ?? 0)}
-                  </p>
-                </div>
+                <p className="text-[10px] leading-relaxed text-zinc-500">
+                  <span className="font-medium">Formula:</span> Balance = Plan Income ({formatCurrency(data.income.planTotal)}) − Total Required − Other Spend ({formatCurrency(t?.otherSpendTotal ?? 0)}).
+                  Saved = Deposits − Withdrawals from <Link href="/savings" className="underline">My Savings</Link>.
+                </p>
               </CardContent>
             </Card>
 
