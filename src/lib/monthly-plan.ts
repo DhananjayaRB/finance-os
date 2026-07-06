@@ -24,6 +24,7 @@ export interface ExcelPlanItem {
   incomeType?: string;
   insuranceType?: string;
   savingType?: string;
+  savingSource?: "plan" | "entry";
   isReceived?: boolean;
   category?: string;
 }
@@ -320,6 +321,20 @@ export async function getExcelMonthlyPlan(
     .map((f) => mapFixedExpense(f, salaryDay, currentDay));
   const fixedItems = monthlyFixed.map((f) => mapFixedExpense(f, salaryDay, currentDay));
   const savingItems = savings.map((s) => mapSaving(s, salaryDay, currentDay));
+  const planSavingsRows = savingItems.map((s) => ({ ...s, savingSource: "plan" as const }));
+  const loggedSavingsRows: ExcelPlanItem[] = savingEntries.map((e) => ({
+    id: e.id,
+    name: e.name,
+    amount: decimalToNumber(e.amount),
+    payable: 0,
+    paymentStatus: "PAID" as PaymentStatus,
+    statusLabel: "Logged",
+    statusColor: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+    beforeSalary: true,
+    savingType: e.type,
+    savingSource: "entry" as const,
+  }));
+  const allSavingsRows = [...planSavingsRows, ...loggedSavingsRows];
 
   const incomeSources: ExcelPlanItem[] = incomes.map((inc) => {
     const amount = decimalToNumber(inc.amount);
@@ -421,7 +436,7 @@ export async function getExcelMonthlyPlan(
   const beforeSalary = {
     loan: loanItems.filter((l) => l.beforeSalary).reduce((s, l) => s + l.payable, 0),
     home: homeItems.filter((h) => h.beforeSalary).reduce((s, h) => s + h.payable, 0),
-    savings: savingItems.filter((s) => s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
+    savings: planSavingsRows.filter((s) => s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
     fixed: fixedItems.filter((f) => f.beforeSalary).reduce((s, f) => s + f.payable, 0),
     subscriptions: subItems.filter((s) => s.beforeSalary).reduce((s, sub) => s + sub.payable, 0),
     insurance: insuranceItems.filter((i) => i.beforeSalary).reduce((s, ins) => s + ins.payable, 0),
@@ -434,7 +449,7 @@ export async function getExcelMonthlyPlan(
   const afterSalary = {
     loan: loanItems.filter((l) => !l.beforeSalary).reduce((s, l) => s + l.payable, 0),
     home: homeItems.filter((h) => !h.beforeSalary).reduce((s, h) => s + h.payable, 0),
-    savings: savingItems.filter((s) => !s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
+    savings: planSavingsRows.filter((s) => !s.beforeSalary).reduce((s, sv) => s + sv.payable, 0),
     fixed: fixedItems.filter((f) => !f.beforeSalary).reduce((s, f) => s + f.payable, 0),
     subscriptions: subItems.filter((s) => !s.beforeSalary).reduce((s, sub) => s + sub.payable, 0),
     insurance: insuranceItems.filter((i) => !i.beforeSalary).reduce((s, ins) => s + ins.payable, 0),
@@ -470,7 +485,7 @@ export async function getExcelMonthlyPlan(
     },
     loans: loanItems,
     homeExpenses: homeItems,
-    savings: savingItems,
+    savings: allSavingsRows,
     monthlyFixedExpenses: fixedItems,
     subscriptions: subItems,
     insurances: insuranceItems,

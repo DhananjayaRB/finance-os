@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import {
   QUICK_AMOUNTS,
   PAYMENT_METHODS,
+  EXPENSE_MERCHANTS,
   isBankPayment,
   type PaymentMethodValue,
 } from "@/lib/constants";
@@ -18,7 +19,6 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 
 const CLASSIFICATIONS = ["NEED", "WANT", "LUXURY", "SAVINGS"] as const;
-const MERCHANTS = ["Swiggy", "Zomato", "Zepto", "Metro", "Amazon", "Food", "Fuel", "Others"];
 
 interface BankAccount {
   id: string;
@@ -130,7 +130,7 @@ export default function QuickAddPage() {
         <div>
           <p className="mb-2 text-sm font-medium text-zinc-500">Merchant</p>
           <div className="flex flex-wrap gap-2">
-            {MERCHANTS.map((m) => (
+            {EXPENSE_MERCHANTS.map((m) => (
               <button
                 key={m}
                 type="button"

@@ -62,6 +62,7 @@ function PlanEditForm({
   onSave: PlanEditSheetProps["onSave"];
 }) {
   const { type, item, isNew } = context;
+  const isLoggedSaving = type === "saving" && item.savingSource === "entry";
   const nameRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<PlanFormState>(() => buildFormFromContext(context));
@@ -118,9 +119,11 @@ function PlanEditForm({
         payload.paymentStatus = form.paymentStatus;
         payload.loanType = form.loanType;
       } else if (type === "home" || type === "saving" || type === "insurance") {
-        payload.payableAmount =
-          form.paymentStatus === "PAID" ? 0 : payableAmount;
-        payload.paymentStatus = form.paymentStatus;
+        if (!isLoggedSaving) {
+          payload.payableAmount =
+            form.paymentStatus === "PAID" ? 0 : payableAmount;
+          payload.paymentStatus = form.paymentStatus;
+        }
         if (type === "home" || type === "insurance") {
           payload.dueDay = parseInt(form.dueDay) || 1;
         }
@@ -234,7 +237,7 @@ function PlanEditForm({
             </div>
           )}
 
-          {(type === "loan" || type === "home" || type === "saving" || type === "insurance") && (
+          {(type === "loan" || type === "home" || (type === "saving" && !isLoggedSaving) || type === "insurance") && (
             <div>
               <Label>Payable ₹ (amount still due)</Label>
               <Input
@@ -303,7 +306,7 @@ function PlanEditForm({
             </>
           )}
 
-          {(type === "loan" || type === "home" || type === "saving" || type === "insurance") && (
+          {(type === "loan" || type === "home" || (type === "saving" && !isLoggedSaving) || type === "insurance") && (
             <div>
               <Label>Payment Status</Label>
               <select

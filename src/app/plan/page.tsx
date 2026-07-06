@@ -57,7 +57,7 @@ function PlanTable({
   rows: ExcelPlanItem[];
   onMarkPaid?: (type: "loan" | "home" | "saving" | "insurance" | "income", id: string) => void;
   onEdit?: (type: PlanItemType, item: ExcelPlanItem) => void;
-  onDelete?: (type: PlanItemType, id: string) => void;
+  onDelete?: (type: PlanItemType, id: string, row: ExcelPlanItem) => void;
   onAdd?: () => void;
   type?: PlanItemType;
   manageHref?: string;
@@ -160,7 +160,7 @@ function PlanTable({
                       {canDelete && (
                         <button
                           type="button"
-                          onClick={() => onDelete!(type!, row.id)}
+                          onClick={() => onDelete!(type!, row.id, row)}
                           className="rounded-lg p-1.5 text-zinc-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
                           aria-label="Delete"
                         >
@@ -168,7 +168,7 @@ function PlanTable({
                         </button>
                       )}
                       {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving" || type === "insurance" || type === "income") && (
-                        (type === "income" ? !row.isReceived : row.payable > 0) && (
+                        (type === "income" ? !row.isReceived : type === "saving" && row.savingSource === "entry" ? false : row.payable > 0) && (
                         <button
                           type="button"
                           onClick={() => onMarkPaid(type, row.id)}
@@ -263,6 +263,26 @@ export default function PlanPage() {
     payload: Record<string, unknown>,
     isNew?: boolean
   ): Promise<boolean> => {
+    if (type === "saving" && editContext?.item.savingSource === "entry" && !isNew) {
+      const res = await fetch("/api/savings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          name: payload.name,
+          amount: payload.amount,
+          type: payload.savingType,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || "Failed to update saving");
+        return false;
+      }
+      load();
+      return true;
+    }
+
     const res = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -284,8 +304,20 @@ export default function PlanPage() {
     return true;
   };
 
-  const handleDelete = async (type: PlanItemType, id: string) => {
+  const handleDelete = async (type: PlanItemType, id: string, row?: ExcelPlanItem) => {
     if (!confirm("Delete this item from your plan?")) return;
+
+    if (type === "saving" && row?.savingSource === "entry") {
+      const res = await fetch(`/api/savings?id=${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || "Failed to delete");
+        return;
+      }
+      load();
+      return;
+    }
+
     const res = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -297,6 +329,24 @@ export default function PlanPage() {
       return;
     }
     load();
+  };
+
+  const openAddHome = () => {
+    setEditContext({
+      type: "home",
+      isNew: true,
+      item: {
+        id: "",
+        name: "",
+        amount: 0,
+        payable: 0,
+        paymentStatus: "PENDING",
+        statusLabel: PAYMENT_STATUS_META.PENDING.label,
+        statusColor: PAYMENT_STATUS_META.PENDING.color,
+        beforeSalary: true,
+        emiDate: 1,
+      },
+    });
   };
 
   const openAddSaving = () => {
@@ -531,6 +581,8 @@ export default function PlanPage() {
               onMarkPaid={markPaid}
               onEdit={openEdit}
               onDelete={handleDelete}
+              onAdd={openAddHome}
+              showWhenEmpty
               type="home"
             />
 
@@ -624,7 +676,7 @@ export default function PlanPage() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleDelete("monthly_fixed", fe.id)}
+                              onClick={() => handleDelete("monthly_fixed", fe.id, fe)}
                               className="rounded-lg p-1.5 text-zinc-500 hover:bg-red-50 hover:text-red-600"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
