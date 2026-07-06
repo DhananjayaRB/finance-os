@@ -55,6 +55,17 @@ export function computePaymentStatus(params: {
   return "PAID";
 }
 
+/** Use stored status from DB; only auto-derive PAID/CLOSED when balance is zero. */
+export function resolveDisplayStatus(params: {
+  stored: PaymentStatusValue;
+  payable: number;
+  isClosed?: boolean;
+}): PaymentStatusValue {
+  if (params.isClosed) return "CLOSED";
+  if (params.payable <= 0) return "PAID";
+  return params.stored;
+}
+
 export function isBeforeSalary(dueDay: number, salaryDay: number): boolean {
   return dueDay < salaryDay;
 }

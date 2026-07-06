@@ -7,6 +7,8 @@ import {
   copyPlanFromPreviousMonth,
   markItemPaid,
   updatePlanItem,
+  createPlanItem,
+  deletePlanItem,
   updatePlanSummary,
   type PlanItemType,
 } from "@/lib/monthly-plan";
@@ -109,6 +111,32 @@ export async function POST(request: NextRequest) {
       return jsonOk(analysis);
     } catch (err) {
       console.error("update_item failed:", err);
+      return jsonError(formatPrismaError(err), 500);
+    }
+  }
+
+  if (body.action === "create_item") {
+    const { type, data } = body;
+    if (!type) return jsonError("type required");
+    try {
+      await createPlanItem(session.userId, type as PlanItemType, data ?? {});
+      const analysis = await getExcelMonthlyPlan(session.userId, month, year);
+      return jsonOk(analysis);
+    } catch (err) {
+      console.error("create_item failed:", err);
+      return jsonError(formatPrismaError(err), 500);
+    }
+  }
+
+  if (body.action === "delete_item") {
+    const { type, id } = body;
+    if (!type || !id) return jsonError("type and id required");
+    try {
+      await deletePlanItem(session.userId, type as PlanItemType, id);
+      const analysis = await getExcelMonthlyPlan(session.userId, month, year);
+      return jsonOk(analysis);
+    } catch (err) {
+      console.error("delete_item failed:", err);
       return jsonError(formatPrismaError(err), 500);
     }
   }

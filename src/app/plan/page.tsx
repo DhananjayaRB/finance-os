@@ -17,10 +17,13 @@ import {
   AlertTriangle,
   Info,
   Pencil,
+  Trash2,
+  Plus,
   ChevronRight as ChevronRightIcon,
 } from "lucide-react";
 import Link from "next/link";
 import type { ExcelMonthlyPlan, ExcelPlanItem } from "@/lib/monthly-plan";
+import { PAYMENT_STATUS_META } from "@/lib/payment-status";
 
 const INSIGHT_ICON: Record<string, React.ReactNode> = {
   success: <CheckCircle2 className="h-4 w-4 text-emerald-600" />,
@@ -43,36 +46,57 @@ function PlanTable({
   rows,
   onMarkPaid,
   onEdit,
+  onDelete,
+  onAdd,
   type,
   manageHref,
+  showWhenEmpty,
 }: {
   title: string;
   headers: string[];
   rows: ExcelPlanItem[];
   onMarkPaid?: (type: "loan" | "home" | "saving" | "insurance", id: string) => void;
   onEdit?: (type: PlanItemType, item: ExcelPlanItem) => void;
+  onDelete?: (type: PlanItemType, id: string) => void;
+  onAdd?: () => void;
   type?: PlanItemType;
   manageHref?: string;
+  showWhenEmpty?: boolean;
 }) {
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !showWhenEmpty) return null;
 
   const canEdit = Boolean(onEdit && type);
+  const canDelete = Boolean(onDelete && type);
 
   return (
     <Card>
       <CardContent className="p-0">
         <div className="flex items-center justify-between border-b border-zinc-200 bg-indigo-600 px-3 py-2 dark:border-zinc-800">
           <p className="text-sm font-semibold text-white">{title}</p>
-          {manageHref && (
-            <Link
-              href={manageHref}
-              className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-indigo-100 hover:text-white"
-            >
-              Manage
-              <ChevronRightIcon className="h-3.5 w-3.5" />
-            </Link>
-          )}
+          <div className="flex items-center gap-2">
+            {onAdd && (
+              <button
+                type="button"
+                onClick={onAdd}
+                className="flex shrink-0 items-center gap-1 rounded-lg bg-white/20 px-2 py-1 text-xs font-medium text-white hover:bg-white/30"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add
+              </button>
+            )}
+            {manageHref && (
+              <Link
+                href={manageHref}
+                className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-indigo-100 hover:text-white"
+              >
+                Manage
+                <ChevronRightIcon className="h-3.5 w-3.5" />
+              </Link>
+            )}
+          </div>
         </div>
+        {rows.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-zinc-500">No items yet. Tap Add to create one.</p>
+        ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -133,6 +157,16 @@ function PlanTable({
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => onDelete!(type!, row.id)}
+                          className="rounded-lg p-1.5 text-zinc-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                          aria-label="Delete"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       {onMarkPaid && type && (type === "loan" || type === "home" || type === "saving" || type === "insurance") && row.payable > 0 && (
                         <button
                           type="button"
@@ -149,6 +183,7 @@ function PlanTable({
             </tbody>
           </table>
         </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -220,11 +255,23 @@ export default function PlanPage() {
     load();
   };
 
-  const saveEdit = async (type: PlanItemType, id: string, payload: Record<string, unknown>): Promise<boolean> => {
+  const saveEdit = async (
+    type: PlanItemType,
+    id: string,
+    payload: Record<string, unknown>,
+    isNew?: boolean
+  ): Promise<boolean> => {
     const res = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "update_item", type, id, data: payload, month, year }),
+      body: JSON.stringify({
+        action: isNew ? "create_item" : "update_item",
+        type,
+        id: isNew ? undefined : id,
+        data: { ...payload, month, year },
+        month,
+        year,
+      }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -233,6 +280,39 @@ export default function PlanPage() {
     }
     load();
     return true;
+  };
+
+  const handleDelete = async (type: PlanItemType, id: string) => {
+    if (!confirm("Delete this item from your plan?")) return;
+    const res = await fetch("/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete_item", type, id, month, year }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Failed to delete");
+      return;
+    }
+    load();
+  };
+
+  const openAddSaving = () => {
+    setEditContext({
+      type: "saving",
+      isNew: true,
+      item: {
+        id: "",
+        name: "",
+        amount: 0,
+        payable: 0,
+        paymentStatus: "PENDING",
+        statusLabel: PAYMENT_STATUS_META.PENDING.label,
+        statusColor: PAYMENT_STATUS_META.PENDING.color,
+        beforeSalary: true,
+        savingType: "SIP",
+      },
+    });
   };
 
   const savePlanIncome = async () => {
@@ -419,6 +499,7 @@ export default function PlanPage() {
               rows={data.loans}
               onMarkPaid={markPaid}
               onEdit={openEdit}
+              onDelete={handleDelete}
               type="loan"
               manageHref="/loans"
             />
@@ -429,6 +510,7 @@ export default function PlanPage() {
               rows={data.homeExpenses}
               onMarkPaid={markPaid}
               onEdit={openEdit}
+              onDelete={handleDelete}
               type="home"
             />
 
@@ -438,6 +520,9 @@ export default function PlanPage() {
               rows={data.savings}
               onMarkPaid={markPaid}
               onEdit={openEdit}
+              onDelete={handleDelete}
+              onAdd={openAddSaving}
+              showWhenEmpty
               type="saving"
               manageHref="/savings"
             />
@@ -509,13 +594,22 @@ export default function PlanPage() {
                         <td className="px-2 py-2 font-medium">{fe.name}</td>
                         <td className="px-2 py-2 text-right">{formatCurrency(fe.amount)}</td>
                         <td className="px-2 py-2">
-                          <button
-                            type="button"
-                            onClick={() => openEdit("monthly_fixed", fe)}
-                            className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="flex justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openEdit("monthly_fixed", fe)}
+                              className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete("monthly_fixed", fe.id)}
+                              className="rounded-lg p-1.5 text-zinc-500 hover:bg-red-50 hover:text-red-600"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -536,6 +630,7 @@ export default function PlanPage() {
               headers={["Name", "Amount", "Status"]}
               rows={data.subscriptions}
               onEdit={openEdit}
+              onDelete={handleDelete}
               type="subscription"
               manageHref="/subscriptions"
             />
@@ -546,6 +641,7 @@ export default function PlanPage() {
               rows={data.insurances}
               onMarkPaid={markPaid}
               onEdit={openEdit}
+              onDelete={handleDelete}
               type="insurance"
               manageHref="/insurance"
             />

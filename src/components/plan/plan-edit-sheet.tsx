@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LOAN_TYPES, INSURANCE_TYPES } from "@/lib/constants";
+import { LOAN_TYPES, INSURANCE_TYPES, SAVING_TYPES } from "@/lib/constants";
 import { PAYMENT_STATUS_META } from "@/lib/payment-status";
 import { INCOME_TYPE_LABELS } from "@/lib/excel-template";
 import type { ExcelPlanItem } from "@/lib/monthly-plan";
@@ -14,28 +14,35 @@ import { X } from "lucide-react";
 export interface EditContext {
   type: PlanItemType;
   item: ExcelPlanItem;
+  isNew?: boolean;
 }
 
 interface PlanEditSheetProps {
   context: EditContext | null;
   onClose: () => void;
-  onSave: (type: PlanItemType, id: string, data: Record<string, unknown>) => Promise<boolean>;
+  onSave: (
+    type: PlanItemType,
+    id: string,
+    data: Record<string, unknown>,
+    isNew?: boolean
+  ) => Promise<boolean>;
 }
 
 function buildFormFromContext(context: EditContext): Record<string, string> {
   const { item } = context;
   return {
     name: item.name,
-    amount: String(item.amount),
+    amount: String(item.amount || ""),
     outstanding: String(item.outstanding ?? ""),
     pendingEmi: String(item.pendingEmi ?? ""),
     emiDate: String(item.emiDate ?? ""),
     interestRate: String(item.interestRate ?? ""),
-    payableAmount: String(item.payable),
+    payableAmount: String(item.payable ?? ""),
     paymentStatus: item.paymentStatus,
     loanType: item.loanType ?? "PERSONAL",
     incomeType: item.incomeType ?? "OTHER",
     insuranceType: item.insuranceType ?? "MEDICAL",
+    savingType: item.savingType ?? "SIP",
     dueDay: String(item.emiDate ?? ""),
     renewalDay: String(item.emiDate ?? ""),
   };
@@ -48,9 +55,9 @@ function PlanEditForm({
 }: {
   context: EditContext;
   onClose: () => void;
-  onSave: (type: PlanItemType, id: string, data: Record<string, unknown>) => Promise<boolean>;
+  onSave: PlanEditSheetProps["onSave"];
 }) {
-  const { type, item } = context;
+  const { type, item, isNew } = context;
   const nameRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(() => buildFormFromContext(context));
@@ -61,46 +68,70 @@ function PlanEditForm({
   }, []);
 
   const title =
-    type === "loan" ? "Edit Loan EMI" :
-    type === "home" ? "Edit Home Expense" :
-    type === "saving" ? "Edit Saving" :
-    type === "income" ? "Edit Income Source" :
-    type === "subscription" ? "Edit Subscription" :
-    type === "insurance" ? "Edit Insurance" :
-    "Edit Fixed Expense";
+    isNew
+      ? type === "saving" ? "Add Saving Goal" :
+        type === "loan" ? "Add Loan EMI" :
+        type === "home" ? "Add Home Expense" :
+        "Add Item"
+      : type === "loan" ? "Edit Loan EMI" :
+        type === "home" ? "Edit Home Expense" :
+        type === "saving" ? "Edit Saving" :
+        type === "income" ? "Edit Income Source" :
+        type === "subscription" ? "Edit Subscription" :
+        type === "insurance" ? "Edit Insurance" :
+        "Edit Fixed Expense";
+
+  const handleStatusChange = (status: string) => {
+    setForm((f) => {
+      const next = { ...f, paymentStatus: status };
+      if (status === "PAID") {
+        next.payableAmount = "0";
+      } else if (status !== "CLOSED" && (parseFloat(f.payableAmount) || 0) <= 0) {
+        next.payableAmount = f.amount || "0";
+      }
+      return next;
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
+      const amount = parseFloat(form.amount) || 0;
+      const payableAmount = parseFloat(form.payableAmount) || 0;
       const payload: Record<string, unknown> = {
-        name: form.name,
-        amount: parseFloat(form.amount) || 0,
+        name: form.name.trim(),
+        amount,
       };
       if (type === "loan") {
-        payload.emiAmount = parseFloat(form.amount) || 0;
+        payload.emiAmount = amount;
         payload.outstanding = parseFloat(form.outstanding) || 0;
         payload.pendingEmi = parseInt(form.pendingEmi) || 0;
         payload.emiDate = parseInt(form.emiDate) || 1;
         payload.interestRate = parseFloat(form.interestRate) || 0;
-        payload.payableAmount = parseFloat(form.payableAmount) || 0;
+        payload.payableAmount =
+          form.paymentStatus === "PAID" ? 0 : payableAmount;
         payload.paymentStatus = form.paymentStatus;
         payload.loanType = form.loanType;
       } else if (type === "home" || type === "saving" || type === "insurance") {
-        payload.payableAmount = parseFloat(form.payableAmount) || 0;
+        payload.payableAmount =
+          form.paymentStatus === "PAID" ? 0 : payableAmount;
         payload.paymentStatus = form.paymentStatus;
-        if (type === "home" || type === "insurance") payload.dueDay = parseInt(form.dueDay) || 1;
+        if (type === "home" || type === "insurance") {
+          payload.dueDay = parseInt(form.dueDay) || 1;
+        }
         if (type === "insurance") payload.insuranceType = form.insuranceType;
+        if (type === "saving") payload.savingType = form.savingType;
       } else if (type === "monthly_fixed") {
-        payload.amount = parseFloat(form.amount) || 0;
+        payload.amount = amount;
       } else if (type === "income") {
-        payload.amount = parseFloat(form.amount) || 0;
+        payload.amount = amount;
         payload.incomeType = form.incomeType;
       } else if (type === "subscription") {
-        payload.amount = parseFloat(form.amount) || 0;
+        payload.amount = amount;
         payload.renewalDay = parseInt(form.renewalDay) || 1;
       }
-      const ok = await onSave(type, item.id, payload);
+      const ok = await onSave(type, item.id, payload, isNew);
       if (ok) onClose();
     } finally {
       setSaving(false);
@@ -183,10 +214,30 @@ function PlanEditForm({
             </div>
           )}
 
+          {type === "saving" && (
+            <div>
+              <Label>Saving Type</Label>
+              <select
+                value={form.savingType}
+                onChange={(e) => set("savingType", e.target.value)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                {SAVING_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.icon} {t.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {(type === "loan" || type === "home" || type === "saving" || type === "insurance") && (
             <div>
               <Label>Payable ₹ (amount still due)</Label>
-              <Input type="number" value={form.payableAmount} onChange={(e) => set("payableAmount", e.target.value)} />
+              <Input
+                type="number"
+                value={form.payableAmount}
+                onChange={(e) => set("payableAmount", e.target.value)}
+                disabled={form.paymentStatus === "PAID"}
+              />
             </div>
           )}
 
@@ -239,14 +290,13 @@ function PlanEditForm({
               <Label>Payment Status</Label>
               <select
                 value={form.paymentStatus}
-                onChange={(e) => {
-                  set("paymentStatus", e.target.value);
-                  if (e.target.value === "PAID") set("payableAmount", "0");
-                }}
+                onChange={(e) => handleStatusChange(e.target.value)}
                 className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
               >
-                {Object.entries(PAYMENT_STATUS_META).map(([k, v]) => (
-                  <option key={k} value={k}>{v.label} — {v.description}</option>
+                {(["PAID", "PENDING", "DUE", "OVERDUE", "CLOSED"] as const).map((k) => (
+                  <option key={k} value={k}>
+                    {PAYMENT_STATUS_META[k].label} — {PAYMENT_STATUS_META[k].description}
+                  </option>
                 ))}
               </select>
             </div>
@@ -254,7 +304,7 @@ function PlanEditForm({
 
           <div className="flex gap-2 pt-2">
             <Button type="submit" className="flex-1" disabled={saving}>
-              {saving ? "Saving..." : "Save Changes"}
+              {saving ? "Saving..." : isNew ? "Add" : "Save Changes"}
             </Button>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
           </div>
@@ -269,7 +319,7 @@ export function PlanEditSheet({ context, onClose, onSave }: PlanEditSheetProps) 
 
   return (
     <PlanEditForm
-      key={`${context.type}-${context.item.id}`}
+      key={`${context.isNew ? "new" : context.item.id}-${context.type}`}
       context={context}
       onClose={onClose}
       onSave={onSave}

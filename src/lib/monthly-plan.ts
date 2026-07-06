@@ -1,9 +1,9 @@
 import prisma from "@/lib/db";
-import { updateForUser } from "@/lib/prisma-helpers";
+import { updateForUser, deleteForUser } from "@/lib/prisma-helpers";
 import { parseLoanType } from "@/lib/constants";
 import { formatPrismaError } from "@/lib/prisma-errors";
 import { decimalToNumber, formatCurrency } from "@/lib/utils";
-import { computePaymentStatus, isBeforeSalary, getStatusMeta } from "@/lib/payment-status";
+import { computePaymentStatus, isBeforeSalary, getStatusMeta, resolveDisplayStatus } from "@/lib/payment-status";
 import { insuranceMonthlyAmount } from "@/lib/account-ledger";
 import type { PaymentStatus } from "@/generated/prisma/client";
 
@@ -23,6 +23,7 @@ export interface ExcelPlanItem {
   loanType?: string;
   incomeType?: string;
   insuranceType?: string;
+  savingType?: string;
   category?: string;
 }
 
@@ -138,15 +139,11 @@ function mapLoan(
   const amount = decimalToNumber(loan.emiAmount as string | number);
   const payable = decimalToNumber(loan.payableAmount as string | number);
   const isClosed = loan.status === "CLOSED";
-  const paymentStatus = isClosed
-    ? "CLOSED"
-    : computePaymentStatus({
-        amount,
-        payable,
-        dueDay: loan.emiDate,
-        currentDay,
-        isClosed,
-      });
+  const paymentStatus = resolveDisplayStatus({
+    stored: loan.paymentStatus,
+    payable,
+    isClosed,
+  });
   const meta = getStatusMeta(paymentStatus);
 
   return {
@@ -181,11 +178,9 @@ function mapFixedExpense(
 ): ExcelPlanItem {
   const amount = decimalToNumber(fe.amount as string | number);
   const payable = decimalToNumber(fe.payableAmount as string | number);
-  const paymentStatus = computePaymentStatus({
-    amount,
+  const paymentStatus = resolveDisplayStatus({
+    stored: fe.paymentStatus,
     payable,
-    dueDay: fe.dueDay,
-    currentDay,
   });
   const meta = getStatusMeta(paymentStatus);
 
@@ -207,16 +202,20 @@ function mapSaving(
   s: {
     id: string;
     name: string;
+    type: string;
     amount: unknown;
     payableAmount: unknown;
     paymentStatus: PaymentStatus;
   },
   salaryDay: number,
-  currentDay: number
+  _currentDay: number
 ): ExcelPlanItem {
   const amount = decimalToNumber(s.amount as string | number);
   const payable = decimalToNumber(s.payableAmount as string | number);
-  const paymentStatus = computePaymentStatus({ amount, payable, currentDay });
+  const paymentStatus = resolveDisplayStatus({
+    stored: s.paymentStatus,
+    payable,
+  });
   const meta = getStatusMeta(paymentStatus);
 
   return {
@@ -228,6 +227,7 @@ function mapSaving(
     statusLabel: meta.label,
     statusColor: meta.color,
     beforeSalary: true,
+    savingType: s.type,
   };
 }
 
@@ -250,11 +250,9 @@ function mapInsurance(
     ins.cycle
   );
   const payable = decimalToNumber(ins.payableAmount as string | number);
-  const paymentStatus = computePaymentStatus({
-    amount,
+  const paymentStatus = resolveDisplayStatus({
+    stored: ins.paymentStatus,
     payable,
-    dueDay: ins.renewalDay,
-    currentDay,
   });
   const meta = getStatusMeta(paymentStatus);
 
@@ -654,8 +652,12 @@ export async function updatePlanItem(
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { amount: Number(data.amount) }),
         ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+        ...(data.savingType !== undefined && { type: data.savingType }),
         ...(paymentStatus !== undefined && { paymentStatus }),
         ...(paymentStatus === "PAID" && { payableAmount: 0 }),
+        ...(paymentStatus !== undefined && {
+          isPayable: paymentStatus !== "PAID" && Number(data.payableAmount ?? data.amount ?? 0) > 0,
+        }),
       });
       if (!result) throw new Error("Item not found");
       return result;
@@ -700,6 +702,147 @@ export async function updatePlanItem(
   } catch (err) {
     throw new Error(formatPrismaError(err));
   }
+}
+
+export async function createPlanItem(
+  userId: string,
+  type: PlanItemType,
+  data: Record<string, unknown>
+) {
+  try {
+    const name = String(data.name || "").trim();
+    if (!name) throw new Error("Name is required");
+
+    const paymentStatus = (data.paymentStatus as PaymentStatus) || "PENDING";
+    const amount = Number(data.amount) || 0;
+    let payableAmount =
+      data.payableAmount !== undefined ? Number(data.payableAmount) : amount;
+    if (paymentStatus === "PAID") payableAmount = 0;
+
+    switch (type) {
+      case "saving":
+        return prisma.saving.create({
+          data: {
+            userId,
+            name,
+            type: (data.savingType as "SIP" | "GOLD" | "PF" | "OTHER") || "SIP",
+            amount,
+            payableAmount,
+            paymentStatus,
+            isPayable: payableAmount > 0,
+          },
+        });
+      case "loan": {
+        const loanType = parseLoanType(data.loanType) || "PERSONAL";
+        return prisma.loan.create({
+          data: {
+            userId,
+            name,
+            emiAmount: Number(data.emiAmount ?? data.amount) || 0,
+            outstanding: Number(data.outstanding) || 0,
+            pendingEmi: Number(data.pendingEmi) || 12,
+            emiDate: Number(data.emiDate) || 5,
+            interestRate: Number(data.interestRate) || 12,
+            payableAmount,
+            paymentStatus,
+            loanType,
+          },
+        });
+      }
+      case "home":
+        return prisma.fixedExpense.create({
+          data: {
+            userId,
+            name,
+            amount,
+            payableAmount,
+            paymentStatus,
+            dueDay: Number(data.dueDay) || 1,
+            category: "HOME",
+            isPayable: payableAmount > 0,
+          },
+        });
+      case "monthly_fixed":
+        return prisma.fixedExpense.create({
+          data: {
+            userId,
+            name,
+            amount,
+            payableAmount: 0,
+            paymentStatus: "PAID",
+            category: "MONTHLY_FIXED",
+            isPayable: false,
+          },
+        });
+      case "income": {
+        const date = new Date();
+        const month = Number(data.month) || date.getMonth() + 1;
+        const year = Number(data.year) || date.getFullYear();
+        return prisma.income.create({
+          data: {
+            userId,
+            source: name,
+            amount,
+            incomeType: (data.incomeType as "SALARY" | "OTHER") || "OTHER",
+            month,
+            year,
+            date,
+          },
+        });
+      }
+      case "subscription":
+        return prisma.subscription.create({
+          data: {
+            userId,
+            name,
+            amount,
+            renewalDay: Number(data.renewalDay) || 1,
+            isActive: true,
+          },
+        });
+      case "insurance":
+        return prisma.insurance.create({
+          data: {
+            userId,
+            name,
+            premium: amount,
+            payableAmount,
+            paymentStatus,
+            renewalDay: Number(data.renewalDay) || 1,
+            insuranceType: (data.insuranceType as "MEDICAL" | "OTHER") || "MEDICAL",
+            cycle: "MONTHLY",
+            isActive: true,
+          },
+        });
+      default:
+        throw new Error(`Cannot create item type: ${type}`);
+    }
+  } catch (err) {
+    throw new Error(formatPrismaError(err));
+  }
+}
+
+export async function deletePlanItem(
+  userId: string,
+  type: PlanItemType,
+  id: string
+) {
+  const modelMap = {
+    loan: "loan",
+    home: "fixedExpense",
+    monthly_fixed: "fixedExpense",
+    saving: "saving",
+    income: "income",
+    subscription: "subscription",
+    insurance: "insurance",
+  } as const;
+
+  const model = modelMap[type];
+  if (!model) throw new Error(`Cannot delete item type: ${type}`);
+
+  const deleted = await deleteForUser(model, userId, id);
+  if (!deleted) throw new Error("Item not found");
+  return { success: true };
 }
 
 export async function updatePlanSummary(
