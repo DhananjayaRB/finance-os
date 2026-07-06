@@ -104,6 +104,19 @@ export interface ExcelMonthlyPlan {
 
   insights: { type: string; title: string; message: string; action?: string }[];
   history: { label: string; planned: number; actual: number; gap: number }[];
+  salaryBreakdown: {
+    incomeReceived: number;
+    salaryReceived: number;
+    emi: number;
+    homeExpense: number;
+    fixedExpense: number;
+    subscriptions: number;
+    insurance: number;
+    savingsLogged: number;
+    otherExpenses: number;
+    totalSpent: number;
+    remaining: number;
+  };
 }
 
 const MONTHS = [
@@ -213,9 +226,14 @@ function mapSaving(
   _currentDay: number
 ): ExcelPlanItem {
   const amount = decimalToNumber(s.amount as string | number);
-  const payable = decimalToNumber(s.payableAmount as string | number);
+  let payable = decimalToNumber(s.payableAmount as string | number);
+  const storedStatus = s.paymentStatus;
+  // Legacy rows: amount set but payableAmount left at 0
+  if (payable <= 0 && storedStatus !== "PAID" && amount > 0) {
+    payable = amount;
+  }
   const paymentStatus = resolveDisplayStatus({
-    stored: s.paymentStatus,
+    stored: storedStatus,
     payable,
   });
   const meta = getStatusMeta(paymentStatus);
@@ -412,8 +430,10 @@ export async function getExcelMonthlyPlan(
   const loanOutstanding = loanItems.reduce((s, l) => s + (l.outstanding ?? 0), 0);
   const homeTotal = homeItems.reduce((s, h) => s + h.amount, 0);
   const homePayable = homeItems.reduce((s, h) => s + h.payable, 0);
-  const savingsTotal = savingItems.reduce((s, sv) => s + sv.amount, 0);
-  const savingsPayable = savingItems.reduce((s, sv) => s + sv.payable, 0);
+  const savingsTotal = planSavingsRows.reduce((s, sv) => s + sv.amount, 0);
+  const savingsPayableFromGoals = planSavingsRows.reduce((s, sv) => s + sv.payable, 0);
+  const savingsRemainingToSave = Math.max(0, savingsTotal - actualSavingsTotal);
+  const savingsPayable = Math.max(savingsPayableFromGoals, savingsRemainingToSave);
   const fixedTotal = fixedItems.reduce((s, f) => s + f.amount, 0);
   const fixedPayable = fixedItems.reduce((s, f) => s + f.payable, 0);
   const subscriptionTotal = subItems.reduce((s, sub) => s + sub.amount, 0);
@@ -432,6 +452,42 @@ export async function getExcelMonthlyPlan(
   const allPayable =
     loanPayable + homePayable + savingsPayable + fixedPayable + subscriptionPayable + insurancePayable;
   const balance = planIncome - totalRequired - otherSpendTotal;
+
+  const incomeReceived = incomeSources
+    .filter((i) => i.isReceived)
+    .reduce((s, i) => s + i.amount, 0);
+  const salaryReceived = incomeSources
+    .filter((i) => i.incomeType === "SALARY" && i.isReceived)
+    .reduce((s, i) => s + i.amount, 0);
+
+  const salaryBreakdown = {
+    incomeReceived,
+    salaryReceived,
+    emi: loanEmi,
+    homeExpense: homeTotal,
+    fixedExpense: fixedTotal,
+    subscriptions: subscriptionTotal,
+    insurance: insuranceTotal,
+    savingsLogged: actualSavingsTotal,
+    otherExpenses: otherSpendTotal,
+    totalSpent:
+      loanEmi +
+      homeTotal +
+      fixedTotal +
+      subscriptionTotal +
+      insuranceTotal +
+      actualSavingsTotal +
+      otherSpendTotal,
+    remaining:
+      incomeReceived -
+      (loanEmi +
+        homeTotal +
+        fixedTotal +
+        subscriptionTotal +
+        insuranceTotal +
+        actualSavingsTotal +
+        otherSpendTotal),
+  };
 
   const beforeSalary = {
     loan: loanItems.filter((l) => l.beforeSalary).reduce((s, l) => s + l.payable, 0),
@@ -531,6 +587,7 @@ export async function getExcelMonthlyPlan(
     },
     insights,
     history: [],
+    salaryBreakdown,
   };
 }
 
@@ -672,16 +729,20 @@ export async function updatePlanItem(
     }
     case "saving": {
       const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+      const amount = Number(data.amount) || 0;
+      let payableAmount =
+        data.payableAmount !== undefined ? Number(data.payableAmount) : amount;
+      if (paymentStatus === "PAID") payableAmount = 0;
+      else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
+
       const result = await updateForUser("saving", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
-        ...(data.amount !== undefined && { amount: Number(data.amount) }),
-        ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+        ...(data.amount !== undefined && { amount }),
+        payableAmount,
         ...(data.savingType !== undefined && { type: data.savingType }),
         ...(paymentStatus !== undefined && { paymentStatus }),
         ...(paymentStatus === "PAID" && { payableAmount: 0 }),
-        ...(paymentStatus !== undefined && {
-          isPayable: paymentStatus !== "PAID" && Number(data.payableAmount ?? data.amount ?? 0) > 0,
-        }),
+        isPayable: payableAmount > 0,
       });
       if (!result) throw new Error("Item not found");
       return result;
@@ -743,6 +804,7 @@ export async function createPlanItem(
     let payableAmount =
       data.payableAmount !== undefined ? Number(data.payableAmount) : amount;
     if (paymentStatus === "PAID") payableAmount = 0;
+    else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
 
     switch (type) {
       case "saving":

@@ -40,6 +40,74 @@ function StatusBadge({ item }: { item: ExcelPlanItem }) {
   );
 }
 
+function SalaryBreakdownCard({
+  breakdown,
+}: {
+  breakdown: ExcelMonthlyPlan["salaryBreakdown"];
+}) {
+  const base = breakdown.salaryReceived > 0 ? breakdown.salaryReceived : breakdown.incomeReceived;
+  if (base <= 0) return null;
+
+  const expenseTotal =
+    breakdown.homeExpense + breakdown.fixedExpense + breakdown.otherExpenses;
+  const othersTotal = breakdown.subscriptions + breakdown.insurance;
+
+  const rows = [
+    { label: "EMI", amount: breakdown.emi, color: "bg-red-500" },
+    { label: "Expenses", amount: expenseTotal, color: "bg-amber-500" },
+    { label: "Savings", amount: breakdown.savingsLogged, color: "bg-emerald-500" },
+    { label: "Others", amount: othersTotal, color: "bg-violet-500" },
+  ].filter((r) => r.amount > 0);
+
+  const spentFromSalary = rows.reduce((s, r) => s + r.amount, 0);
+  const remaining = base - spentFromSalary;
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="border-b bg-violet-600 px-3 py-2">
+          <p className="text-sm font-semibold text-white">How I Spent This Month</p>
+          <p className="text-xs text-violet-100">
+            Salary received: {formatCurrency(breakdown.salaryReceived || breakdown.incomeReceived)}
+          </p>
+        </div>
+        <div className="space-y-3 p-3">
+          {rows.map((row) => {
+            const pct = Math.min(100, Math.round((row.amount / base) * 100));
+            return (
+              <div key={row.label}>
+                <div className="mb-1 flex items-center justify-between text-xs">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">{row.label}</span>
+                  <span className="text-zinc-600 dark:text-zinc-400">
+                    {formatCurrency(row.amount)}
+                    <span className="ml-1 text-zinc-400">({pct}%)</span>
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                  <div className={cn("h-full rounded-full", row.color)} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            );
+          })}
+          <div className="flex items-center justify-between border-t border-zinc-200 pt-2 text-xs font-semibold dark:border-zinc-800">
+            <span className={remaining >= 0 ? "text-emerald-600" : "text-red-600"}>
+              {remaining >= 0 ? "Remaining" : "Over budget"}
+            </span>
+            <span className={remaining >= 0 ? "text-emerald-600" : "text-red-600"}>
+              {formatCurrency(Math.abs(remaining))}
+            </span>
+          </div>
+          {(breakdown.subscriptions > 0 || breakdown.insurance > 0) && (
+            <p className="text-[10px] text-zinc-400">
+              Others includes subscriptions ({formatCurrency(breakdown.subscriptions)}) and insurance ({formatCurrency(breakdown.insurance)}).
+            </p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function PlanTable({
   title,
   headers,
@@ -464,6 +532,10 @@ export default function PlanPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {data.salaryBreakdown && (
+              <SalaryBreakdownCard breakdown={data.salaryBreakdown} />
+            )}
 
             {/* Income */}
             <Card>
