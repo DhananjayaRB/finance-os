@@ -3,7 +3,8 @@ import { getSession } from "@/lib/auth";
 import prisma from "@/lib/db";
 import { jsonOk, jsonError } from "@/lib/api-utils";
 import { updateForUser, deleteForUser } from "@/lib/prisma-helpers";
-import { applyIncomeToAccount, reverseIncomeFromAccount } from "@/lib/account-ledger";
+import { applyIncomeToAccount } from "@/lib/account-ledger";
+import { syncIncomeLedger } from "@/lib/plan-ledger-sync";
 import type { IncomeType } from "@/generated/prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -37,6 +38,7 @@ export async function POST(request: NextRequest) {
   const month = body.month ?? date.getMonth() + 1;
   const year = body.year ?? date.getFullYear();
   const creditAccount = body.creditAccount !== false;
+  const isReceived = body.isReceived !== undefined ? Boolean(body.isReceived) : true;
 
   const income = await prisma.income.create({
     data: {
@@ -48,11 +50,12 @@ export async function POST(request: NextRequest) {
       month,
       year,
       isRecurring: body.isRecurring ?? false,
+      isReceived,
       notes: body.notes || null,
     },
   });
 
-  if (creditAccount && amount > 0) {
+  if (creditAccount && amount > 0 && isReceived) {
     try {
       const accountId = await applyIncomeToAccount({
         userId: session.userId,
@@ -93,6 +96,11 @@ export async function PUT(request: NextRequest) {
   const { id, ...rest } = body;
   if (!id) return jsonError("ID required");
 
+  const before = await prisma.income.findFirst({
+    where: { id, userId: session.userId },
+  });
+  if (!before) return jsonError("Income not found", 404);
+
   const data: Record<string, unknown> = {};
   if (rest.source !== undefined) data.source = String(rest.source).trim();
   if (rest.name !== undefined) data.source = String(rest.name).trim();
@@ -110,6 +118,26 @@ export async function PUT(request: NextRequest) {
 
   const income = await updateForUser("income", session.userId, id, data);
   if (!income) return jsonError("Income not found", 404);
+
+  const row = income as {
+    amount: unknown;
+    source: string;
+    isReceived: boolean;
+    accountId?: string | null;
+  };
+  const accountId = await syncIncomeLedger({
+    userId: session.userId,
+    incomeId: id,
+    isReceived: row.isReceived,
+    amount: Number(row.amount),
+    source: row.source,
+    accountId: row.accountId ?? before.accountId,
+  });
+  if (accountId && !row.accountId) {
+    const updated = await updateForUser("income", session.userId, id, { accountId });
+    return jsonOk(updated);
+  }
+
   return jsonOk(income);
 }
 
@@ -126,13 +154,15 @@ export async function DELETE(request: NextRequest) {
   });
   if (!existing) return jsonError("Income not found", 404);
 
-  if (existing.accountId && Number(existing.amount) > 0) {
+  if (existing.isReceived && Number(existing.amount) > 0) {
     try {
-      await reverseIncomeFromAccount({
+      await syncIncomeLedger({
         userId: session.userId,
+        incomeId: id,
+        isReceived: false,
         amount: Number(existing.amount),
+        source: existing.source,
         accountId: existing.accountId,
-        refId: id,
       });
     } catch {
       return jsonError("Cannot delete — insufficient bank balance to reverse this income");

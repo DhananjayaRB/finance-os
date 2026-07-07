@@ -5,6 +5,14 @@ import { formatPrismaError } from "@/lib/prisma-errors";
 import { decimalToNumber, formatCurrency } from "@/lib/utils";
 import { computePaymentStatus, isBeforeSalary, getStatusMeta, resolveDisplayStatus } from "@/lib/payment-status";
 import { insuranceMonthlyAmount } from "@/lib/account-ledger";
+import {
+  getPlanPayableState,
+  resolvePayableFromRecord,
+  syncIncomeLedger,
+  syncPayableLedgerDelta,
+  syncPlanItemCreateLedger,
+  syncPlanItemDeleteLedger,
+} from "@/lib/plan-ledger-sync";
 import { buildPlanAlerts } from "@/lib/plan-alerts";
 import type { PaymentStatus } from "@/generated/prisma/client";
 
@@ -814,33 +822,97 @@ export async function markItemPaid(
   id: string
 ) {
   if (type === "income") {
-    return updateForUser("income", userId, id, { isReceived: true });
+    const before = await prisma.income.findFirst({ where: { id, userId } });
+    if (!before) return null;
+    const result = await updateForUser("income", userId, id, { isReceived: true });
+    if (!result) return null;
+    const accountId = await syncIncomeLedger({
+      userId,
+      incomeId: id,
+      isReceived: true,
+      amount: Number((result as { amount: unknown }).amount),
+      source: String((result as { source: string }).source),
+      accountId: (result as { accountId?: string | null }).accountId ?? before.accountId,
+    });
+    if (accountId && !(result as { accountId?: string | null }).accountId) {
+      return updateForUser("income", userId, id, { accountId });
+    }
+    return result;
   }
+
+  const before = await getPlanPayableState(userId, type, id);
+  if (!before || before.skipLedger) {
+    if (type === "loan") {
+      return updateForUser("loan", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+    }
+    if (type === "home") {
+      return updateForUser("fixedExpense", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+    }
+    if (type === "insurance") {
+      return updateForUser("insurance", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+    }
+    if (type === "subscription") {
+      return updateForUser("subscription", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+    }
+    if (type === "saving") {
+      const plan = await updateForUser("saving", userId, id, {
+        payableAmount: 0,
+        paymentStatus: "PAID",
+        isPayable: false,
+      });
+      if (plan) return plan;
+      return updateForUser("savingEntry", userId, id, {
+        payableAmount: 0,
+        paymentStatus: "PAID",
+      });
+    }
+    return null;
+  }
+
+  let result: unknown = null;
   if (type === "loan") {
-    return updateForUser("loan", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-  }
-  if (type === "home") {
-    return updateForUser("fixedExpense", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-  }
-  if (type === "insurance") {
-    return updateForUser("insurance", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-  }
-  if (type === "subscription") {
-    return updateForUser("subscription", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-  }
-  if (type === "saving") {
-    const plan = await updateForUser("saving", userId, id, {
+    result = await updateForUser("loan", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
+  } else if (type === "home") {
+    result = await updateForUser("fixedExpense", userId, id, {
+      payableAmount: 0,
+      paymentStatus: "PAID",
+    });
+  } else if (type === "insurance") {
+    result = await updateForUser("insurance", userId, id, {
+      payableAmount: 0,
+      paymentStatus: "PAID",
+    });
+  } else if (type === "subscription") {
+    result = await updateForUser("subscription", userId, id, {
+      payableAmount: 0,
+      paymentStatus: "PAID",
+    });
+  } else if (type === "saving") {
+    result = await updateForUser("saving", userId, id, {
       payableAmount: 0,
       paymentStatus: "PAID",
       isPayable: false,
     });
-    if (plan) return plan;
-    return updateForUser("savingEntry", userId, id, {
-      payableAmount: 0,
-      paymentStatus: "PAID",
-    });
+    if (!result) {
+      result = await updateForUser("savingEntry", userId, id, {
+        payableAmount: 0,
+        paymentStatus: "PAID",
+      });
+    }
   }
-  return null;
+
+  if (!result) return null;
+
+  await syncPayableLedgerDelta({
+    userId,
+    refType: before.refType,
+    refId: id,
+    previousPayable: before.payable,
+    newPayable: 0,
+    label: before.label,
+  });
+
+  return result;
 }
 
 export type PlanItemType =
@@ -866,6 +938,7 @@ export async function updatePlanItem(
         if (data.loanType !== undefined && !loanType) {
           throw new Error(`Invalid loan type: ${data.loanType}`);
         }
+        const before = await getPlanPayableState(userId, "loan", id);
         const result = await updateForUser("loan", userId, id, {
           ...(data.name !== undefined && { name: String(data.name) }),
           ...(data.emiAmount !== undefined && { emiAmount: Number(data.emiAmount) }),
@@ -880,11 +953,23 @@ export async function updatePlanItem(
           ...(paymentStatus === "PAID" && { payableAmount: 0 }),
         });
         if (!result) throw new Error("Loan not found");
+        if (before && !before.skipLedger) {
+          await syncPayableLedgerDelta({
+            userId,
+            refType: before.refType,
+            refId: id,
+            previousPayable: before.payable,
+            newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
+            label: before.label,
+          });
+        }
         return result;
       }
     case "home":
     case "monthly_fixed": {
       const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+      const before =
+        type === "home" ? await getPlanPayableState(userId, "home", id) : null;
       const result = await updateForUser("fixedExpense", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { amount: Number(data.amount) }),
@@ -894,6 +979,16 @@ export async function updatePlanItem(
         ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
       if (!result) throw new Error("Item not found");
+      if (before && !before.skipLedger) {
+        await syncPayableLedgerDelta({
+          userId,
+          refType: before.refType,
+          refId: id,
+          previousPayable: before.payable,
+          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
+          label: before.label,
+        });
+      }
       return result;
     }
     case "saving": {
@@ -904,7 +999,8 @@ export async function updatePlanItem(
       if (paymentStatus === "PAID") payableAmount = 0;
       else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
 
-      const result = await updateForUser("saving", userId, id, {
+      const before = await getPlanPayableState(userId, "saving", id);
+      let result = await updateForUser("saving", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { amount }),
         payableAmount,
@@ -913,10 +1009,30 @@ export async function updatePlanItem(
         ...(paymentStatus === "PAID" && { payableAmount: 0 }),
         isPayable: payableAmount > 0,
       });
+      if (!result) {
+        result = await updateForUser("savingEntry", userId, id, {
+          ...(data.name !== undefined && { name: String(data.name) }),
+          ...(data.amount !== undefined && { amount }),
+          payableAmount,
+          ...(paymentStatus !== undefined && { paymentStatus }),
+          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
+        });
+      }
       if (!result) throw new Error("Item not found");
+      if (before && !before.skipLedger) {
+        await syncPayableLedgerDelta({
+          userId,
+          refType: before.refType,
+          refId: id,
+          previousPayable: before.payable,
+          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
+          label: before.label,
+        });
+      }
       return result;
     }
     case "income": {
+      const before = await prisma.income.findFirst({ where: { id, userId } });
       const result = await updateForUser("income", userId, id, {
         ...(data.name !== undefined && { source: String(data.name) }),
         ...(data.amount !== undefined && { amount: Number(data.amount) }),
@@ -926,6 +1042,23 @@ export async function updatePlanItem(
         ...(data.isReceived !== undefined && { isReceived: Boolean(data.isReceived) }),
       });
       if (!result) throw new Error("Item not found");
+      const row = result as {
+        amount: unknown;
+        source: string;
+        isReceived: boolean;
+        accountId?: string | null;
+      };
+      const accountId = await syncIncomeLedger({
+        userId,
+        incomeId: id,
+        isReceived: row.isReceived,
+        amount: Number(row.amount),
+        source: row.source,
+        accountId: row.accountId ?? before?.accountId,
+      });
+      if (accountId && !row.accountId) {
+        return updateForUser("income", userId, id, { accountId });
+      }
       return result;
     }
     case "subscription": {
@@ -936,6 +1069,7 @@ export async function updatePlanItem(
       if (paymentStatus === "PAID") payableAmount = 0;
       else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
 
+      const before = await getPlanPayableState(userId, "subscription", id);
       const result = await updateForUser("subscription", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { amount }),
@@ -945,10 +1079,21 @@ export async function updatePlanItem(
         ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
       if (!result) throw new Error("Item not found");
+      if (before && !before.skipLedger) {
+        await syncPayableLedgerDelta({
+          userId,
+          refType: before.refType,
+          refId: id,
+          previousPayable: before.payable,
+          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
+          label: before.label,
+        });
+      }
       return result;
     }
     case "insurance": {
       const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+      const before = await getPlanPayableState(userId, "insurance", id);
       const result = await updateForUser("insurance", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { premium: Number(data.amount) }),
@@ -959,6 +1104,16 @@ export async function updatePlanItem(
         ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
       if (!result) throw new Error("Item not found");
+      if (before && !before.skipLedger) {
+        await syncPayableLedgerDelta({
+          userId,
+          refType: before.refType,
+          refId: id,
+          previousPayable: before.payable,
+          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
+          label: before.label,
+        });
+      }
       return result;
     }
     default:
@@ -986,8 +1141,8 @@ export async function createPlanItem(
     else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
 
     switch (type) {
-      case "saving":
-        return prisma.saving.create({
+      case "saving": {
+        const created = await prisma.saving.create({
           data: {
             userId,
             name,
@@ -998,9 +1153,12 @@ export async function createPlanItem(
             isPayable: payableAmount > 0,
           },
         });
+        await syncPlanItemCreateLedger(userId, "saving", created as unknown as Record<string, unknown>);
+        return created;
+      }
       case "loan": {
         const loanType = parseLoanType(data.loanType) || "PERSONAL";
-        return prisma.loan.create({
+        const created = await prisma.loan.create({
           data: {
             userId,
             name,
@@ -1014,9 +1172,14 @@ export async function createPlanItem(
             loanType,
           },
         });
+        await syncPlanItemCreateLedger(userId, "loan", {
+          ...(created as unknown as Record<string, unknown>),
+          amount: Number(created.emiAmount),
+        });
+        return created;
       }
-      case "home":
-        return prisma.fixedExpense.create({
+      case "home": {
+        const created = await prisma.fixedExpense.create({
           data: {
             userId,
             name,
@@ -1028,6 +1191,9 @@ export async function createPlanItem(
             isPayable: payableAmount > 0,
           },
         });
+        await syncPlanItemCreateLedger(userId, "home", created as unknown as Record<string, unknown>);
+        return created;
+      }
       case "monthly_fixed":
         return prisma.fixedExpense.create({
           data: {
@@ -1044,7 +1210,7 @@ export async function createPlanItem(
         const date = new Date();
         const month = Number(data.month) || date.getMonth() + 1;
         const year = Number(data.year) || date.getFullYear();
-        return prisma.income.create({
+        const created = await prisma.income.create({
           data: {
             userId,
             source: name,
@@ -1056,9 +1222,11 @@ export async function createPlanItem(
             date,
           },
         });
+        await syncPlanItemCreateLedger(userId, "income", created as unknown as Record<string, unknown>);
+        return created;
       }
-      case "subscription":
-        return prisma.subscription.create({
+      case "subscription": {
+        const created = await prisma.subscription.create({
           data: {
             userId,
             name,
@@ -1069,8 +1237,11 @@ export async function createPlanItem(
             isActive: true,
           },
         });
-      case "insurance":
-        return prisma.insurance.create({
+        await syncPlanItemCreateLedger(userId, "subscription", created as unknown as Record<string, unknown>);
+        return created;
+      }
+      case "insurance": {
+        const created = await prisma.insurance.create({
           data: {
             userId,
             name,
@@ -1083,6 +1254,12 @@ export async function createPlanItem(
             isActive: true,
           },
         });
+        await syncPlanItemCreateLedger(userId, "insurance", {
+          ...(created as unknown as Record<string, unknown>),
+          amount: Number(created.premium),
+        });
+        return created;
+      }
       default:
         throw new Error(`Cannot create item type: ${type}`);
     }
@@ -1109,7 +1286,14 @@ export async function deletePlanItem(
   const model = modelMap[type];
   if (!model) throw new Error(`Cannot delete item type: ${type}`);
 
+  await syncPlanItemDeleteLedger(userId, type, id);
+
   const deleted = await deleteForUser(model, userId, id);
+  if (!deleted && type === "saving") {
+    const entryDeleted = await deleteForUser("savingEntry", userId, id);
+    if (!entryDeleted) throw new Error("Item not found");
+    return { success: true };
+  }
   if (!deleted) throw new Error("Item not found");
   return { success: true };
 }
