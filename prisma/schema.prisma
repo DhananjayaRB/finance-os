@@ -242,6 +242,7 @@ model Expense {
   id            String        @id @default(cuid())
   userId        String
   accountId     String?
+  cashBoxId     String?
   categoryId    String?
   amount        Decimal       @db.Decimal(14, 2)
   merchant      String?
@@ -257,6 +258,7 @@ model Expense {
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   account  Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  cashBox  CashBox?  @relation(fields: [cashBoxId], references: [id], onDelete: SetNull)
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@index([userId, year, month])
@@ -435,11 +437,13 @@ model CashBox {
   name      String
   type      CashBoxType @default(WALLET)
   balance   Decimal     @default(0) @db.Decimal(14, 2)
+  isPrimary Boolean     @default(false)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
   user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions CashTransaction[]
+  expenses     Expense[]
 
   @@unique([userId, name])
   @@index([userId])

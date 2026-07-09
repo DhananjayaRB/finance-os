@@ -22,12 +22,20 @@ interface Expense {
   notes: string | null;
   date: string;
   account?: { id: string; name: string } | null;
+  cashBox?: { id: string; name: string } | null;
   category?: { name: string; icon: string | null } | null;
 }
 
 interface BankAccount {
   id: string;
   name: string;
+  isPrimary: boolean;
+}
+
+interface CashBoxOption {
+  id: string;
+  name: string;
+  balance: string | number;
   isPrimary: boolean;
 }
 
@@ -41,12 +49,14 @@ function toFormData(exp: Expense): ExpenseFormData {
     notes: exp.notes || "",
     date: new Date(exp.date).toISOString().slice(0, 10),
     accountId: exp.account?.id || "",
+    cashBoxId: exp.cashBox?.id || "",
   };
 }
 
 export default function ExpensesPage() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
+  const [cashBoxes, setCashBoxes] = useState<CashBoxOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [editExpense, setEditExpense] = useState<ExpenseFormData | null>(null);
 
@@ -55,10 +65,12 @@ export default function ExpensesPage() {
     Promise.all([
       fetch("/api/expenses").then((r) => r.json()),
       fetch("/api/accounts").then((r) => r.json()),
+      fetch("/api/cash-box").then((r) => r.json()),
     ])
-      .then(([expenseData, accountData]) => {
+      .then(([expenseData, accountData, cashBoxData]) => {
         setExpenses(Array.isArray(expenseData) ? expenseData : []);
         setAccounts(accountData.accounts || []);
+        setCashBoxes(Array.isArray(cashBoxData) ? cashBoxData : []);
       })
       .finally(() => setLoading(false));
   };
@@ -101,6 +113,7 @@ export default function ExpensesPage() {
         notes: data.notes,
         date: data.date,
         accountId: data.accountId || undefined,
+        cashBoxId: data.cashBoxId || undefined,
       }),
     });
     if (!res.ok) {
@@ -152,7 +165,8 @@ export default function ExpensesPage() {
                       <p className="font-medium">{exp.merchant || "Expense"}</p>
                       <p className="text-xs text-zinc-500">
                         {exp.classification} • {getPaymentMethodLabel(exp.paymentMethod)}
-                        {exp.account ? ` • ${exp.account.name}` : ""} •{" "}
+                        {exp.account ? ` • ${exp.account.name}` : ""}
+                        {exp.cashBox ? ` • ${exp.cashBox.name}` : ""} •{" "}
                         {new Date(exp.date).toLocaleDateString("en-IN")}
                       </p>
                       {exp.notes && (
@@ -192,6 +206,7 @@ export default function ExpensesPage() {
         <ExpenseEditSheet
           expense={editExpense}
           accounts={accounts}
+          cashBoxes={cashBoxes}
           onClose={() => setEditExpense(null)}
           onSave={handleEditSave}
         />

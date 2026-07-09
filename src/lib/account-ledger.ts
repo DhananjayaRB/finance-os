@@ -39,8 +39,13 @@ export async function ensureDefaultBankAccount(userId: string) {
 }
 
 export async function getDefaultCashBox(userId: string) {
+  const primary = await prisma.cashBox.findFirst({
+    where: { userId, isPrimary: true },
+  });
+  if (primary) return primary;
   const wallet = await prisma.cashBox.findFirst({
     where: { userId, type: "WALLET" },
+    orderBy: { createdAt: "asc" },
   });
   if (wallet) return wallet;
   return prisma.cashBox.findFirst({
@@ -199,7 +204,7 @@ export async function applyExpenseToSource(params: {
   cashBoxId?: string | null;
   refId: string;
   description?: string;
-}): Promise<{ accountId?: string } | null> {
+}): Promise<{ accountId?: string; cashBoxId?: string } | null> {
   const { userId, amount, paymentMethod, refId } = params;
   if (amount <= 0) return null;
 
@@ -216,7 +221,7 @@ export async function applyExpenseToSource(params: {
       amount,
       description: params.description || `Expense`,
     });
-    return {};
+    return { cashBoxId };
   }
 
   if (paymentMethod === "CREDIT_CARD") return null;
@@ -274,18 +279,23 @@ export async function reverseExpenseFromSource(params: {
   amount: number;
   paymentMethod: string;
   accountId?: string | null;
+  cashBoxId?: string | null;
   refId: string;
   description?: string;
 }) {
-  const { userId, amount, paymentMethod, accountId, refId } = params;
+  const { userId, amount, paymentMethod, accountId, cashBoxId, refId } = params;
   if (amount <= 0) return;
 
   if (paymentMethod === "CASH") {
-    const box = await getDefaultCashBox(userId);
-    if (!box) return;
+    let boxId = cashBoxId;
+    if (!boxId) {
+      const box = await getDefaultCashBox(userId);
+      if (!box) return;
+      boxId = box.id;
+    }
     await creditCashBox({
       userId,
-      cashBoxId: box.id,
+      cashBoxId: boxId,
       amount,
       description: params.description || "Expense deleted — cash restored",
     });

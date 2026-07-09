@@ -10,7 +10,7 @@ export async function GET() {
 
   const boxes = await prisma.cashBox.findMany({
     where: { userId: session.userId },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
   });
 
   return jsonOk(boxes);
@@ -32,26 +32,41 @@ export async function POST(request: NextRequest) {
   });
   if (existing) return jsonError("A cash box with this name already exists");
 
-  const box = await prisma.cashBox.create({
-    data: {
-      userId: session.userId,
-      name,
-      type,
-      balance,
-    },
-  });
+  const existingCount = await prisma.cashBox.count({ where: { userId: session.userId } });
+  const isPrimary = Boolean(body.isPrimary) || existingCount === 0;
 
-  if (balance > 0) {
-    await prisma.cashTransaction.create({
+  const box = await prisma.$transaction(async (tx) => {
+    if (isPrimary) {
+      await tx.cashBox.updateMany({
+        where: { userId: session.userId, isPrimary: true },
+        data: { isPrimary: false },
+      });
+    }
+
+    const created = await tx.cashBox.create({
       data: {
         userId: session.userId,
-        cashBoxId: box.id,
-        type: "CASH_IN",
-        amount: balance,
-        description: "Opening balance",
+        name,
+        type,
+        balance,
+        isPrimary,
       },
     });
-  }
+
+    if (balance > 0) {
+      await tx.cashTransaction.create({
+        data: {
+          userId: session.userId,
+          cashBoxId: created.id,
+          type: "CASH_IN",
+          amount: balance,
+          description: "Opening balance",
+        },
+      });
+    }
+
+    return created;
+  });
 
   return jsonOk(box, 201);
 }
@@ -61,7 +76,7 @@ export async function PUT(request: NextRequest) {
   if (!session) return jsonError("Unauthorized", 401);
 
   const body = await request.json();
-  const { id, name, type, balance, adjustment, description } = body;
+  const { id, name, type, balance, adjustment, description, isPrimary } = body;
   if (!id) return jsonError("ID required");
 
   const existing = await prisma.cashBox.findFirst({
@@ -84,16 +99,25 @@ export async function PUT(request: NextRequest) {
     const newBalance = Number(existing.balance) + delta;
     if (newBalance < 0) return jsonError("Balance cannot go below zero");
 
-    const [box] = await prisma.$transaction([
-      prisma.cashBox.update({
+    const box = await prisma.$transaction(async (tx) => {
+      if (isPrimary) {
+        await tx.cashBox.updateMany({
+          where: { userId: session.userId, isPrimary: true, id: { not: id } },
+          data: { isPrimary: false },
+        });
+      }
+
+      const updated = await tx.cashBox.update({
         where: { id },
         data: {
           ...(name !== undefined && { name: String(name).trim() }),
           ...(type !== undefined && { type: type as CashBoxType }),
+          ...(isPrimary !== undefined && { isPrimary: Boolean(isPrimary) }),
           balance: newBalance,
         },
-      }),
-      prisma.cashTransaction.create({
+      });
+
+      await tx.cashTransaction.create({
         data: {
           userId: session.userId,
           cashBoxId: id,
@@ -101,8 +125,10 @@ export async function PUT(request: NextRequest) {
           amount: Math.abs(delta),
           description: description || (delta > 0 ? "Cash added" : "Cash removed"),
         },
-      }),
-    ]);
+      });
+
+      return updated;
+    });
 
     return jsonOk(box);
   }
@@ -113,11 +139,19 @@ export async function PUT(request: NextRequest) {
 
     const diff = newBalance - Number(existing.balance);
     const box = await prisma.$transaction(async (tx) => {
+      if (isPrimary) {
+        await tx.cashBox.updateMany({
+          where: { userId: session.userId, isPrimary: true, id: { not: id } },
+          data: { isPrimary: false },
+        });
+      }
+
       const updated = await tx.cashBox.update({
         where: { id },
         data: {
           ...(name !== undefined && { name: String(name).trim() }),
           ...(type !== undefined && { type: type as CashBoxType }),
+          ...(isPrimary !== undefined && { isPrimary: Boolean(isPrimary) }),
           balance: newBalance,
         },
       });
@@ -140,12 +174,22 @@ export async function PUT(request: NextRequest) {
     return jsonOk(box);
   }
 
-  const box = await prisma.cashBox.update({
-    where: { id },
-    data: {
-      ...(name !== undefined && { name: String(name).trim() }),
-      ...(type !== undefined && { type: type as CashBoxType }),
-    },
+  const box = await prisma.$transaction(async (tx) => {
+    if (isPrimary) {
+      await tx.cashBox.updateMany({
+        where: { userId: session.userId, isPrimary: true, id: { not: id } },
+        data: { isPrimary: false },
+      });
+    }
+
+    return tx.cashBox.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name: String(name).trim() }),
+        ...(type !== undefined && { type: type as CashBoxType }),
+        ...(isPrimary !== undefined && { isPrimary: Boolean(isPrimary) }),
+      },
+    });
   });
 
   return jsonOk(box);

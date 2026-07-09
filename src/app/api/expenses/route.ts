@@ -8,6 +8,12 @@ import { applyExpenseToSource, reverseExpenseFromSource } from "@/lib/account-le
 import { isBankPayment } from "@/lib/constants";
 import type { ExpenseClass, PaymentMethod } from "@/generated/prisma/client";
 
+const expenseInclude = {
+  category: true,
+  account: { select: { id: true, name: true } },
+  cashBox: { select: { id: true, name: true } },
+} as const;
+
 export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session) return jsonError("Unauthorized", 401);
@@ -21,7 +27,7 @@ export async function GET(request: NextRequest) {
       month: parseInt(searchParams.get("month") || String(month)),
       year: parseInt(searchParams.get("year") || String(year)),
     },
-    include: { category: true, account: { select: { id: true, name: true } } },
+    include: expenseInclude,
     orderBy: { date: "desc" },
   });
 
@@ -39,6 +45,7 @@ export async function POST(request: NextRequest) {
   const debitSource = body.debitSource !== false;
 
   let accountId: string | undefined;
+  let cashBoxId: string | undefined;
 
   if (debitSource && amount > 0) {
     try {
@@ -52,6 +59,7 @@ export async function POST(request: NextRequest) {
         description: body.merchant ? `Expense: ${body.merchant}` : "Expense",
       });
       accountId = result?.accountId;
+      cashBoxId = result?.cashBoxId;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to debit payment source";
       return jsonError(message);
@@ -67,12 +75,13 @@ export async function POST(request: NextRequest) {
       classification: body.classification || "NEED",
       paymentMethod,
       accountId: accountId || body.accountId || null,
+      cashBoxId: cashBoxId || body.cashBoxId || null,
       notes: body.notes,
       date,
       month: date.getMonth() + 1,
       year: date.getFullYear(),
     },
-    include: { category: true, account: { select: { id: true, name: true } } },
+    include: expenseInclude,
   });
 
   return jsonOk(expense, 201);
@@ -98,6 +107,8 @@ export async function PUT(request: NextRequest) {
   const newMerchant = rest.merchant !== undefined ? rest.merchant : existing.merchant;
   const requestedAccountId =
     rest.accountId !== undefined ? (rest.accountId || null) : existing.accountId;
+  const requestedCashBoxId =
+    rest.cashBoxId !== undefined ? (rest.cashBoxId || null) : existing.cashBoxId;
   const debitSource = rest.debitSource !== false;
 
   const hadLedger =
@@ -112,6 +123,7 @@ export async function PUT(request: NextRequest) {
         amount: Number(existing.amount),
         paymentMethod: existing.paymentMethod,
         accountId: existing.accountId,
+        cashBoxId: existing.cashBoxId,
         refId: id,
         description: `Expense edit reversal: ${existing.merchant || "Expense"}`,
       });
@@ -121,6 +133,7 @@ export async function PUT(request: NextRequest) {
   }
 
   let accountId: string | null = requestedAccountId;
+  let cashBoxId: string | null = requestedCashBoxId;
 
   if (debitSource && newAmount > 0) {
     try {
@@ -129,13 +142,19 @@ export async function PUT(request: NextRequest) {
         amount: newAmount,
         paymentMethod: newPaymentMethod,
         accountId: requestedAccountId,
+        cashBoxId: requestedCashBoxId,
         refId: id,
         description: newMerchant ? `Expense: ${newMerchant}` : "Expense",
       });
       if (isBankPayment(newPaymentMethod)) {
         accountId = result?.accountId ?? requestedAccountId;
+        cashBoxId = null;
+      } else if (newPaymentMethod === "CASH") {
+        cashBoxId = result?.cashBoxId ?? requestedCashBoxId;
+        accountId = null;
       } else {
         accountId = null;
+        cashBoxId = null;
       }
     } catch (err) {
       if (hadLedger) {
@@ -144,6 +163,7 @@ export async function PUT(request: NextRequest) {
           amount: Number(existing.amount),
           paymentMethod: existing.paymentMethod,
           accountId: existing.accountId,
+          cashBoxId: existing.cashBoxId,
           refId: id,
           description: existing.merchant ? `Expense: ${existing.merchant}` : "Expense",
         }).catch(() => undefined);
@@ -153,9 +173,10 @@ export async function PUT(request: NextRequest) {
     }
   } else {
     accountId = null;
+    cashBoxId = null;
   }
 
-  const data: Record<string, unknown> = { accountId };
+  const data: Record<string, unknown> = { accountId, cashBoxId };
   if (rest.merchant !== undefined) data.merchant = String(rest.merchant).trim() || null;
   if (rest.amount !== undefined) data.amount = newAmount;
   if (rest.classification !== undefined) data.classification = rest.classification as ExpenseClass;
@@ -171,7 +192,7 @@ export async function PUT(request: NextRequest) {
   const expense = await prisma.expense.update({
     where: { id },
     data,
-    include: { category: true, account: { select: { id: true, name: true } } },
+    include: expenseInclude,
   });
 
   return jsonOk(expense);
@@ -196,6 +217,7 @@ export async function DELETE(request: NextRequest) {
       amount: Number(existing.amount),
       paymentMethod: existing.paymentMethod,
       accountId: existing.accountId,
+      cashBoxId: existing.cashBoxId,
       refId: id,
     });
   } catch {

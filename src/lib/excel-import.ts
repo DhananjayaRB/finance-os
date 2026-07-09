@@ -346,7 +346,7 @@ export const SEED_DATA = {
     { name: "HDFC Millenia", limit: 200000, used: 62000, statementDay: 5, dueDay: 25 },
   ],
   cashBoxes: [
-    { name: "Wallet Cash", type: "WALLET" as const, balance: 2350 },
+    { name: "Wallet Cash", type: "WALLET" as const, balance: 2350, isPrimary: true },
     { name: "Home Cash", type: "HOME" as const, balance: 5000 },
     { name: "Office Cash", type: "OFFICE" as const, balance: 1000 },
     { name: "Emergency Cash", type: "EMERGENCY" as const, balance: 10000 },

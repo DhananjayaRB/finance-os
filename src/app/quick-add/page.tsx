@@ -26,6 +26,13 @@ interface BankAccount {
   isPrimary: boolean;
 }
 
+interface CashBoxOption {
+  id: string;
+  name: string;
+  balance: string | number;
+  isPrimary: boolean;
+}
+
 export default function QuickAddPage() {
   const router = useRouter();
   const [amount, setAmount] = useState("");
@@ -34,17 +41,25 @@ export default function QuickAddPage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodValue>("UPI");
   const [notes, setNotes] = useState("");
   const [accountId, setAccountId] = useState("");
+  const [cashBoxId, setCashBoxId] = useState("");
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
+  const [cashBoxes, setCashBoxes] = useState<CashBoxOption[]>([]);
   const [saving, setSaving] = useState(false);
 
   const primaryAccount = accounts.find((a) => a.isPrimary) ?? accounts[0];
+  const primaryCashBox = cashBoxes.find((b) => b.isPrimary) ?? cashBoxes[0];
   const showBank = isBankPayment(paymentMethod);
+  const showCash = paymentMethod === "CASH";
 
   useEffect(() => {
     fetch("/api/accounts")
       .then((r) => r.json())
       .then((d) => setAccounts(d.accounts || []))
       .catch(() => setAccounts([]));
+    fetch("/api/cash-box")
+      .then((r) => r.json())
+      .then((d) => setCashBoxes(Array.isArray(d) ? d : []))
+      .catch(() => setCashBoxes([]));
   }, []);
 
   useEffect(() => {
@@ -52,6 +67,12 @@ export default function QuickAddPage() {
       setAccountId(primaryAccount.id);
     }
   }, [showBank, primaryAccount, accountId]);
+
+  useEffect(() => {
+    if (showCash && primaryCashBox && !cashBoxId) {
+      setCashBoxId(primaryCashBox.id);
+    }
+  }, [showCash, primaryCashBox, cashBoxId]);
 
   const handleSave = async () => {
     if (!amount || parseFloat(amount) <= 0) return;
@@ -67,6 +88,7 @@ export default function QuickAddPage() {
           paymentMethod,
           notes: notes.trim() || undefined,
           accountId: showBank ? accountId || primaryAccount?.id : undefined,
+          cashBoxId: showCash ? cashBoxId || primaryCashBox?.id : undefined,
         }),
       });
       if (!res.ok) {
@@ -183,6 +205,27 @@ export default function QuickAddPage() {
                 </option>
               ))}
             </select>
+          </div>
+        )}
+
+        {showCash && cashBoxes.length > 0 && (
+          <div>
+            <Label>Cash box</Label>
+            <select
+              value={cashBoxId || primaryCashBox?.id || ""}
+              onChange={(e) => setCashBoxId(e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              {cashBoxes.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} — {formatCurrency(Number(b.balance))}
+                  {b.isPrimary ? " (Primary)" : ""}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-zinc-500">
+              Pick another box if your primary cash box has insufficient balance.
+            </p>
           </div>
         )}
 

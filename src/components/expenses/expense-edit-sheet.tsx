@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PAYMENT_METHODS, isBankPayment } from "@/lib/constants";
+import { formatCurrency } from "@/lib/utils";
 import { X } from "lucide-react";
 
 const CLASSIFICATIONS = ["NEED", "WANT", "LUXURY", "SAVINGS"] as const;
@@ -18,6 +19,7 @@ export interface ExpenseFormData {
   notes: string;
   date: string;
   accountId: string;
+  cashBoxId: string;
 }
 
 interface BankAccount {
@@ -26,27 +28,44 @@ interface BankAccount {
   isPrimary: boolean;
 }
 
+interface CashBoxOption {
+  id: string;
+  name: string;
+  balance: string | number;
+  isPrimary: boolean;
+}
+
 export function ExpenseEditSheet({
   expense,
   accounts,
+  cashBoxes,
   onClose,
   onSave,
 }: {
   expense: ExpenseFormData;
   accounts: BankAccount[];
+  cashBoxes: CashBoxOption[];
   onClose: () => void;
   onSave: (data: ExpenseFormData) => Promise<boolean>;
 }) {
   const [form, setForm] = useState(expense);
   const [saving, setSaving] = useState(false);
   const primaryAccount = accounts.find((a) => a.isPrimary) ?? accounts[0];
+  const primaryCashBox = cashBoxes.find((b) => b.isPrimary) ?? cashBoxes[0];
   const showBank = isBankPayment(form.paymentMethod);
+  const showCash = form.paymentMethod === "CASH";
 
   useEffect(() => {
     if (showBank && !form.accountId && primaryAccount) {
       setForm((f) => ({ ...f, accountId: primaryAccount.id }));
     }
   }, [showBank, form.accountId, primaryAccount]);
+
+  useEffect(() => {
+    if (showCash && !form.cashBoxId && primaryCashBox) {
+      setForm((f) => ({ ...f, cashBoxId: primaryCashBox.id }));
+    }
+  }, [showCash, form.cashBoxId, primaryCashBox]);
 
   const set = <K extends keyof ExpenseFormData>(key: K, value: ExpenseFormData[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -151,6 +170,24 @@ export function ExpenseEditSheet({
                   <option key={a.id} value={a.id}>
                     {a.name}
                     {a.isPrimary ? " (Primary)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {showCash && cashBoxes.length > 0 && (
+            <div>
+              <Label>Cash box</Label>
+              <select
+                value={form.cashBoxId || primaryCashBox?.id || ""}
+                onChange={(e) => set("cashBoxId", e.target.value)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                {cashBoxes.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name} — {formatCurrency(Number(b.balance))}
+                    {b.isPrimary ? " (Primary)" : ""}
                   </option>
                 ))}
               </select>

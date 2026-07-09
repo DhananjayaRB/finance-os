@@ -7,13 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CASH_BOX_TYPES } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Star } from "lucide-react";
 
 interface CashBox {
   id: string;
   name: string;
   type: string;
   balance: string | number;
+  isPrimary: boolean;
 }
 
 function getBoxIcon(type: string) {
@@ -56,18 +57,19 @@ export default function CashBoxPage() {
     const name = form.get("name") as string;
     const type = form.get("type") as string;
     const balance = parseFloat(form.get("balance") as string) || 0;
+    const isPrimary = form.get("isPrimary") === "on";
 
     if (editBox?.id) {
       await fetch("/api/cash-box", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: editBox.id, name, type, balance }),
+        body: JSON.stringify({ id: editBox.id, name, type, balance, isPrimary }),
       });
     } else {
       await fetch("/api/cash-box", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, type, balance }),
+        body: JSON.stringify({ name, type, balance, isPrimary }),
       });
     }
 
@@ -141,6 +143,14 @@ export default function CashBoxPage() {
                   defaultValue={editBox ? Number(editBox.balance) : ""}
                   required={!editBox}
                 />
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name="isPrimary"
+                    defaultChecked={editBox?.isPrimary ?? !editBox}
+                  />
+                  Set as primary cash box (default for cash expenses)
+                </label>
                 <div className="flex gap-2">
                   <Button type="submit" className="flex-1">Save</Button>
                   <Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
@@ -180,7 +190,12 @@ export default function CashBoxPage() {
                 <div className="flex items-center gap-3">
                   <span className="text-2xl">{getBoxIcon(box.type)}</span>
                   <div>
-                    <p className="font-medium">{box.name}</p>
+                    <p className="flex items-center gap-1 font-medium">
+                      {box.name}
+                      {box.isPrimary && (
+                        <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                      )}
+                    </p>
                     <p className="text-xs text-zinc-500">
                       {CASH_BOX_TYPES.find((t) => t.value === box.type)?.label ?? box.type}
                     </p>
