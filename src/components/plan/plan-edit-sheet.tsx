@@ -7,8 +7,7 @@ import { Label } from "@/components/ui/label";
 import { LOAN_TYPES, INSURANCE_TYPES, SAVING_TYPES } from "@/lib/constants";
 import { PAYMENT_STATUS_META } from "@/lib/payment-status";
 import { INCOME_TYPE_LABELS } from "@/lib/excel-template";
-import type { ExcelPlanItem } from "@/lib/monthly-plan";
-import type { PlanItemType } from "@/lib/monthly-plan";
+import type { ExcelPlanItem, PlanItemType } from "@/lib/monthly-plan-types";
 import { X } from "lucide-react";
 
 export interface EditContext {

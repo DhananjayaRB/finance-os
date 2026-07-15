@@ -14,11 +14,12 @@ import {
   isBankPayment,
   type PaymentMethodValue,
 } from "@/lib/constants";
+import { getExpenseAreaMeta } from "@/lib/expense-areas";
 import { formatCurrency } from "@/lib/utils";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 
-const CLASSIFICATIONS = ["NEED", "WANT", "LUXURY", "SAVINGS"] as const;
+const CLASSIFICATIONS = ["NEED", "WANT", "LUXURY"] as const;
 
 interface BankAccount {
   id: string;
@@ -36,8 +37,11 @@ interface CashBoxOption {
 export default function QuickAddPage() {
   const router = useRouter();
   const [amount, setAmount] = useState("");
-  const [merchant, setMerchant] = useState("Swiggy");
-  const [classification, setClassification] = useState<string>("WANT");
+  const [merchant, setMerchant] = useState<string>("Online Food");
+  const [merchantDetail, setMerchantDetail] = useState("");
+  const [classification, setClassification] = useState<string>(
+    getExpenseAreaMeta("Online Food").classification
+  );
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodValue>("UPI");
   const [notes, setNotes] = useState("");
   const [accountId, setAccountId] = useState("");
@@ -84,6 +88,7 @@ export default function QuickAddPage() {
         body: JSON.stringify({
           amount: parseFloat(amount),
           merchant,
+          merchantDetail: merchantDetail.trim() || undefined,
           classification,
           paymentMethod,
           notes: notes.trim() || undefined,
@@ -150,22 +155,38 @@ export default function QuickAddPage() {
         </div>
 
         <div>
-          <p className="mb-2 text-sm font-medium text-zinc-500">Merchant</p>
+          <p className="mb-2 text-sm font-medium text-zinc-500">Merchant area</p>
           <div className="flex flex-wrap gap-2">
-            {EXPENSE_MERCHANTS.map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setMerchant(m)}
-                className={`rounded-xl px-3 py-2 text-sm ${
-                  merchant === m
-                    ? "bg-emerald-600 text-white"
-                    : "bg-zinc-100 dark:bg-zinc-800"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
+            {EXPENSE_MERCHANTS.map((m) => {
+              const meta = getExpenseAreaMeta(m);
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => {
+                    setMerchant(m);
+                    setClassification(meta.classification);
+                  }}
+                  className={`rounded-xl px-3 py-2 text-sm ${
+                    merchant === m
+                      ? "bg-emerald-600 text-white"
+                      : "bg-zinc-100 dark:bg-zinc-800"
+                  }`}
+                >
+                  <span className="mr-1">{meta.icon}</span>
+                  {m}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-2">
+            <Label>Detail (optional)</Label>
+            <Input
+              value={merchantDetail}
+              onChange={(e) => setMerchantDetail(e.target.value)}
+              placeholder="Brand / shop — e.g. Swiggy, DMart…"
+              className="mt-1"
+            />
           </div>
         </div>
 
@@ -231,7 +252,7 @@ export default function QuickAddPage() {
 
         <div>
           <p className="mb-2 text-sm font-medium text-zinc-500">Classification</p>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {CLASSIFICATIONS.map((c) => (
               <button
                 key={c}

@@ -5,6 +5,7 @@ import { jsonOk, jsonError } from "@/lib/api-utils";
 import {
   getExcelMonthlyPlan,
   copyPlanFromPreviousMonth,
+  initializeMonthPlan,
   markItemPaid,
   updatePlanItem,
   createPlanItem,
@@ -75,17 +76,33 @@ export async function POST(request: NextRequest) {
   const year = body.year ?? getCurrentMonthYear().year;
 
   if (body.action === "copy_previous") {
-    const copied = await copyPlanFromPreviousMonth(session.userId, month, year);
-    if (!copied) return jsonError("No previous month plan found", 404);
-    const analysis = await getExcelMonthlyPlan(session.userId, month, year);
-    return jsonOk({ budget: copied, analysis });
+    try {
+      const copied = await copyPlanFromPreviousMonth(session.userId, month, year);
+      if (!copied) return jsonError("No previous month plan found", 404);
+      const analysis = await getExcelMonthlyPlan(session.userId, month, year);
+      return jsonOk({ budget: copied, analysis });
+    } catch (err) {
+      console.error("copy_previous failed:", err);
+      return jsonError(formatPrismaError(err), 500);
+    }
+  }
+
+  if (body.action === "initialize_month") {
+    try {
+      await initializeMonthPlan(session.userId, month, year);
+      const analysis = await getExcelMonthlyPlan(session.userId, month, year);
+      return jsonOk(analysis);
+    } catch (err) {
+      console.error("initialize_month failed:", err);
+      return jsonError(formatPrismaError(err), 500);
+    }
   }
 
   if (body.action === "mark_paid") {
     const { type, id } = body;
     if (!type || !id) return jsonError("type and id required");
     try {
-      const updated = await markItemPaid(session.userId, type, id);
+      const updated = await markItemPaid(session.userId, month, year, type, id);
       if (!updated) return jsonError("Item not found", 404);
       const analysis = await getExcelMonthlyPlan(session.userId, month, year);
       return jsonOk(analysis);
@@ -99,7 +116,7 @@ export async function POST(request: NextRequest) {
     const { type, id, data } = body;
     if (!type || !id) return jsonError("type and id required");
     try {
-      await updatePlanItem(session.userId, type as PlanItemType, id, data ?? {});
+      await updatePlanItem(session.userId, month, year, type as PlanItemType, id, data ?? {});
       const analysis = await getExcelMonthlyPlan(session.userId, month, year);
       return jsonOk(analysis);
     } catch (err) {
@@ -112,7 +129,7 @@ export async function POST(request: NextRequest) {
     const { type, data } = body;
     if (!type) return jsonError("type required");
     try {
-      await createPlanItem(session.userId, type as PlanItemType, data ?? {});
+      await createPlanItem(session.userId, month, year, type as PlanItemType, data ?? {});
       const analysis = await getExcelMonthlyPlan(session.userId, month, year);
       return jsonOk(analysis);
     } catch (err) {
@@ -125,7 +142,7 @@ export async function POST(request: NextRequest) {
     const { type, id } = body;
     if (!type || !id) return jsonError("type and id required");
     try {
-      await deletePlanItem(session.userId, type as PlanItemType, id);
+      await deletePlanItem(session.userId, month, year, type as PlanItemType, id);
       const analysis = await getExcelMonthlyPlan(session.userId, month, year);
       return jsonOk(analysis);
     } catch (err) {

@@ -4,23 +4,36 @@ import prisma from "@/lib/db";
 import { jsonOk, jsonError } from "@/lib/api-utils";
 import { getCurrentMonthYear } from "@/lib/utils";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session) return jsonError("Unauthorized", 401);
 
-  const { month, year } = getCurrentMonthYear();
+  const { searchParams } = new URL(request.url);
+  const { month: curMonth, year: curYear } = getCurrentMonthYear();
+  const month = parseInt(searchParams.get("month") || String(curMonth));
+  const year = parseInt(searchParams.get("year") || String(curYear));
+
   const budget = await prisma.budget.findUnique({
     where: { userId_year_month: { userId: session.userId, year, month } },
   });
 
-  const [fixedExpenses, subscriptions, savings, incomes] = await Promise.all([
-    prisma.fixedExpense.findMany({ where: { userId: session.userId } }),
-    prisma.subscription.findMany({ where: { userId: session.userId, isActive: true } }),
-    prisma.saving.findMany({ where: { userId: session.userId } }),
-    prisma.income.findMany({ where: { userId: session.userId, month, year } }),
-  ]);
-
-  return jsonOk({ budget, fixedExpenses, subscriptions, savings, incomes });
+  return jsonOk({
+    budget: budget
+      ? {
+          needAmount: Number(budget.needAmount),
+          wantAmount: Number(budget.wantAmount),
+          luxuryAmount: Number(budget.luxuryAmount),
+          totalIncome: Number(budget.totalIncome),
+        }
+      : {
+          needAmount: 10000,
+          wantAmount: 0,
+          luxuryAmount: 0,
+          totalIncome: 0,
+        },
+    month,
+    year,
+  });
 }
 
 export async function PUT(request: NextRequest) {
@@ -28,13 +41,37 @@ export async function PUT(request: NextRequest) {
   if (!session) return jsonError("Unauthorized", 401);
 
   const body = await request.json();
-  const { month, year } = getCurrentMonthYear();
+  const { month: curMonth, year: curYear } = getCurrentMonthYear();
+  const month = Number(body.month) || curMonth;
+  const year = Number(body.year) || curYear;
+
+  const needAmount = body.needAmount !== undefined ? Number(body.needAmount) : undefined;
+  const wantAmount = body.wantAmount !== undefined ? Number(body.wantAmount) : undefined;
+  const luxuryAmount = body.luxuryAmount !== undefined ? Number(body.luxuryAmount) : undefined;
 
   const budget = await prisma.budget.upsert({
     where: { userId_year_month: { userId: session.userId, year, month } },
-    create: { userId: session.userId, month, year, totalIncome: body.totalIncome || 0, ...body },
-    update: body,
+    create: {
+      userId: session.userId,
+      month,
+      year,
+      totalIncome: Number(body.totalIncome) || 0,
+      needAmount: needAmount ?? 10000,
+      wantAmount: wantAmount ?? 0,
+      luxuryAmount: luxuryAmount ?? 0,
+    },
+    update: {
+      ...(needAmount !== undefined && { needAmount }),
+      ...(wantAmount !== undefined && { wantAmount }),
+      ...(luxuryAmount !== undefined && { luxuryAmount }),
+      ...(body.totalIncome !== undefined && { totalIncome: Number(body.totalIncome) }),
+    },
   });
 
-  return jsonOk(budget);
+  return jsonOk({
+    needAmount: Number(budget.needAmount),
+    wantAmount: Number(budget.wantAmount),
+    luxuryAmount: Number(budget.luxuryAmount),
+    totalIncome: Number(budget.totalIncome),
+  });
 }

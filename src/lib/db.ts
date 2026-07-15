@@ -3,7 +3,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 
 /** Bump when Prisma schema changes (also triggers delegate re-check). */
-const PRISMA_SCHEMA_VERSION = 7;
+const PRISMA_SCHEMA_VERSION = 8;
 
 const REQUIRED_DELEGATES = [
   "savingEntry",

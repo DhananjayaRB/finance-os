@@ -1,6 +1,6 @@
-import type { PaymentStatus } from "@/generated/prisma/client";
+import type { PlanPaymentStatus } from "@/lib/monthly-plan-types";
 
-export type PaymentStatusValue = PaymentStatus;
+export type PaymentStatusValue = PlanPaymentStatus;
 
 export const PAYMENT_STATUS_META: Record<
   PaymentStatusValue,

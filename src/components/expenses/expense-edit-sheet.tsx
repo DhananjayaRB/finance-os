@@ -4,15 +4,17 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PAYMENT_METHODS, isBankPayment } from "@/lib/constants";
+import { PAYMENT_METHODS, isBankPayment, EXPENSE_MERCHANTS } from "@/lib/constants";
+import { getExpenseAreaMeta } from "@/lib/expense-areas";
 import { formatCurrency } from "@/lib/utils";
 import { X } from "lucide-react";
 
-const CLASSIFICATIONS = ["NEED", "WANT", "LUXURY", "SAVINGS"] as const;
+const CLASSIFICATIONS = ["NEED", "WANT", "LUXURY"] as const;
 
 export interface ExpenseFormData {
   id: string;
   merchant: string;
+  merchantDetail?: string;
   amount: number | string;
   classification: string;
   paymentMethod: string;
@@ -78,6 +80,7 @@ export function ExpenseEditSheet({
       const ok = await onSave({
         ...form,
         merchant: form.merchant.trim(),
+        merchantDetail: (form.merchantDetail || "").trim(),
         amount: parseFloat(String(form.amount)) || 0,
         notes: form.notes.trim(),
       });
@@ -111,12 +114,37 @@ export function ExpenseEditSheet({
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <Label>Merchant / Description</Label>
+            <Label>Merchant area</Label>
+            <select
+              value={form.merchant || "Others"}
+              onChange={(e) => {
+                const area = e.target.value;
+                const meta = getExpenseAreaMeta(area);
+                setForm((f) => ({
+                  ...f,
+                  merchant: area,
+                  classification: meta.classification,
+                }));
+              }}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              {EXPENSE_MERCHANTS.map((m) => {
+                const meta = getExpenseAreaMeta(m);
+                return (
+                  <option key={m} value={m}>
+                    {meta.icon} {m}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          <div>
+            <Label>Detail (optional — brand / shop name)</Label>
             <Input
-              value={form.merchant}
-              onChange={(e) => set("merchant", e.target.value)}
-              placeholder="Swiggy, Metro, Fuel..."
-              required
+              value={form.merchantDetail || ""}
+              onChange={(e) => set("merchantDetail", e.target.value)}
+              placeholder="e.g. Swiggy, DMart, local shop…"
             />
           </div>
 

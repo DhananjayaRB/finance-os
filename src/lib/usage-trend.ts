@@ -4,6 +4,7 @@ import { decimalToNumber, getCurrentMonthYear, getSalaryCycleDates } from "@/lib
 export type UsageTrendPeriod =
   | "this_month"
   | "salary_cycle"
+  | "last_7_days"
   | "last_3_months"
   | "last_6_months"
   | "this_year"
@@ -97,6 +98,16 @@ function getDateRange(
         start: cycleStart,
         end: new Date(cycleEnd.getFullYear(), cycleEnd.getMonth(), cycleEnd.getDate(), 23, 59, 59),
         periodLabel: `${formatDayLabel(cycleStart)} → ${formatDayLabel(cycleEnd)}`,
+      };
+    }
+    case "last_7_days": {
+      const start = new Date(now);
+      start.setDate(start.getDate() - 6);
+      start.setHours(0, 0, 0, 0);
+      return {
+        start,
+        end: now,
+        periodLabel: "Last 7 Days",
       };
     }
     case "last_3_months": {
@@ -225,7 +236,7 @@ export async function getUsageTrend(
 
   let points: UsageTrendPoint[] = [];
 
-  if (period === "this_month" || period === "salary_cycle") {
+  if (period === "this_month" || period === "salary_cycle" || period === "last_7_days") {
     points = buildDailyPoints(expenses, start!, end!);
     if (points.length === 0 && consolidated.total > 0) {
       points = [{ label: periodLabel, ...consolidated }];

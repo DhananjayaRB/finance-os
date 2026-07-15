@@ -1,4 +1,4 @@
-import { ExpenseClass } from "@/generated/prisma/client";
+import type { ExpenseClass } from "@/generated/prisma/client";
 
 export const DEFAULT_CATEGORIES: {
   name: string;
@@ -70,34 +70,14 @@ export const NAV_ITEMS = [
 
 export const QUICK_AMOUNTS = [50, 100, 250, 500, 1000, 2000];
 
-export const EXPENSE_MERCHANTS = [
-  "Swiggy",
-  "Zomato",
-  "Zepto",
-  "Blinkit",
-  "BigBasket",
-  "Metro",
-  "DMart",
-  "Amazon",
-  "Flipkart",
-  "Food",
-  "Restaurant",
-  "Fuel",
-  "Petrol",
-  "Uber",
-  "Ola",
-  "Medical",
-  "Pharmacy",
-  "Electricity",
-  "Recharge",
-  "Rent",
-  "Maid",
-  "Grocery",
-  "Tea/Coffee",
-  "Others",
-] as const;
-
-export type ExpenseMerchant = (typeof EXPENSE_MERCHANTS)[number];
+export {
+  EXPENSE_AREAS,
+  EXPENSE_AREA_NAMES,
+  EXPENSE_MERCHANTS,
+  resolveExpenseArea,
+  getExpenseAreaMeta,
+} from "@/lib/expense-areas";
+export type { ExpenseAreaName, ExpenseMerchant } from "@/lib/expense-areas";
 
 export const PAYMENT_METHODS = [
   { value: "CASH", label: "Cash", icon: "💵" },

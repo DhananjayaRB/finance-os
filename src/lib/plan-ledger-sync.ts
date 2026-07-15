@@ -5,6 +5,7 @@ import {
   debitAccount,
   applyIncomeToAccount,
 } from "@/lib/account-ledger";
+import type { PaymentStatus } from "@/generated/prisma/client";
 
 export type PlanPayableRefType =
   | "plan_loan"
@@ -12,7 +13,8 @@ export type PlanPayableRefType =
   | "plan_saving"
   | "plan_saving_entry"
   | "plan_subscription"
-  | "plan_insurance";
+  | "plan_insurance"
+  | "plan_month";
 
 const INCOME_REF_TYPES = ["income", "income_reversal"];
 
@@ -254,6 +256,63 @@ export function resolvePayableFromRecord(
   return toNum(record.payableAmount);
 }
 
+export function resolveMonthRowPayable(row: {
+  amount: unknown;
+  payableAmount: unknown;
+  paymentStatus: PaymentStatus;
+}): number {
+  if (row.paymentStatus === "PAID") return 0;
+  let payable = toNum(row.payableAmount);
+  const amount = toNum(row.amount);
+  if (payable <= 0 && amount > 0) payable = amount;
+  return payable;
+}
+
+export async function getMonthPlanPayableState(row: {
+  id: string;
+  amount: unknown;
+  payableAmount: unknown;
+  paymentStatus: PaymentStatus;
+  sourceType: string;
+  sourceId: string;
+}) {
+  const label = await resolveMonthPaymentLabel(row.sourceType, row.sourceId);
+  return {
+    payable: resolveMonthRowPayable(row),
+    label,
+    refType: "plan_month" as PlanPayableRefType,
+    refId: row.id,
+  };
+}
+
+async function resolveMonthPaymentLabel(sourceType: string, sourceId: string) {
+  switch (sourceType) {
+    case "LOAN": {
+      const item = await prisma.loan.findUnique({ where: { id: sourceId } });
+      return item?.name ?? "Loan";
+    }
+    case "HOME":
+    case "MONTHLY_FIXED": {
+      const item = await prisma.fixedExpense.findUnique({ where: { id: sourceId } });
+      return item?.name ?? "Expense";
+    }
+    case "SUBSCRIPTION": {
+      const item = await prisma.subscription.findUnique({ where: { id: sourceId } });
+      return item?.name ?? "Subscription";
+    }
+    case "INSURANCE": {
+      const item = await prisma.insurance.findUnique({ where: { id: sourceId } });
+      return item?.name ?? "Insurance";
+    }
+    case "SAVING": {
+      const item = await prisma.saving.findUnique({ where: { id: sourceId } });
+      return item?.name ?? "Saving";
+    }
+    default:
+      return "Plan item";
+  }
+}
+
 export async function syncPlanItemCreateLedger(
   userId: string,
   type: PlanItemLedgerType,
@@ -284,15 +343,19 @@ export async function syncPlanItemCreateLedger(
 
   const paymentStatus = created.paymentStatus as string | undefined;
   const amount = toNum(created.amount ?? created.emiAmount ?? created.premium);
-  const payable = resolvePayableFromRecord(refType, created);
+  const payable = created.payableAmount !== undefined
+    ? toNum(created.payableAmount)
+    : resolvePayableFromRecord(refType, created);
   const label = String(created.name ?? created.source ?? "Item");
+  const ledgerRefType: PlanPayableRefType = "plan_month";
+  const ledgerRefId = String(created.id);
 
   if (type === "saving" && created.kind && created.kind !== "DEPOSIT") return;
   if (paymentStatus === "PAID" || payable < amount) {
     await syncPayableLedgerDelta({
       userId,
-      refType,
-      refId: String(created.id),
+      refType: ledgerRefType,
+      refId: ledgerRefId,
       previousPayable: amount,
       newPayable: payable,
       label,
@@ -328,7 +391,8 @@ function planRefTypeForCreate(type: PlanItemLedgerType): PlanPayableRefType | nu
 export async function syncPlanItemDeleteLedger(
   userId: string,
   type: PlanItemLedgerType | "monthly_fixed",
-  id: string
+  id: string,
+  refTypeOverride?: PlanPayableRefType
 ) {
   if (type === "monthly_fixed") return;
 
@@ -343,6 +407,15 @@ export async function syncPlanItemDeleteLedger(
       source: income.source,
       accountId: income.accountId,
     });
+    return;
+  }
+
+  if (refTypeOverride === "plan_month") {
+    const row = await prisma.planMonthPayment.findFirst({ where: { id, userId } });
+    if (!row) return;
+    const state = await getMonthPlanPayableState(row);
+    if (state.payable <= 0) return;
+    await reverseAllPlanLedger(userId, "plan_month", id, state.label);
     return;
   }
 

@@ -1,4 +1,4 @@
-import type { ExcelMonthlyPlan } from "@/lib/monthly-plan";
+import type { ExcelMonthlyPlan } from "@/lib/monthly-plan-types";
 import { formatCurrency } from "@/lib/utils";
 
 export type PlanAlertType = "critical" | "warning" | "info" | "success";
@@ -115,7 +115,7 @@ export function buildPlanAlerts(plan: ExcelMonthlyPlan): PlanAlert[] {
     alerts.push({
       type: "critical",
       title: "Plan shortfall",
-      message: `Over budget by ${formatCurrency(Math.abs(t.balance))} after all commitments`,
+      message: `Over budget by ${formatCurrency(Math.abs(t.balance))} on plan commitments (Income − Required)`,
       category: "balance",
     });
   }

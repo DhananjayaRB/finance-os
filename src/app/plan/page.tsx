@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatCurrency, cn } from "@/lib/utils";
 import { PlanEditSheet, type EditContext } from "@/components/plan/plan-edit-sheet";
-import type { PlanItemType } from "@/lib/monthly-plan";
+import type {
+  PlanItemType,
+  ExcelMonthlyPlan,
+  ExcelPlanItem,
+} from "@/lib/monthly-plan-types";
 import {
   ChevronLeft,
   ChevronRight,
@@ -21,8 +25,12 @@ import {
   ChevronRight as ChevronRightIcon,
 } from "lucide-react";
 import Link from "next/link";
-import type { ExcelMonthlyPlan, ExcelPlanItem } from "@/lib/monthly-plan";
 import { PAYMENT_STATUS_META } from "@/lib/payment-status";
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
 
 const INSIGHT_ICON: Record<string, React.ReactNode> = {
   success: <CheckCircle2 className="h-4 w-4 text-emerald-600" />,
@@ -50,16 +58,15 @@ function SalaryBreakdownCard({
     breakdown.planIncome ||
     0;
 
-  const expenseTotal =
-    breakdown.homeExpense + breakdown.fixedExpense + breakdown.otherExpenses;
-  const othersTotal = breakdown.subscriptions + breakdown.insurance;
+  const fixedExpense = breakdown.homeExpense + breakdown.fixedExpense;
 
   const rows = [
-    { label: "EMI", amount: breakdown.emi, color: "bg-red-500" },
-    { label: "Expenses", amount: expenseTotal, color: "bg-amber-500" },
+    { label: "Loan", amount: breakdown.emi, color: "bg-red-500" },
+    { label: "Fixed Expense", amount: fixedExpense, color: "bg-amber-500" },
     { label: "Savings", amount: breakdown.savingsLogged, color: "bg-emerald-500" },
-    { label: "Others", amount: othersTotal, color: "bg-violet-500" },
-  ].filter((r) => r.amount > 0);
+    { label: "Subscriptions", amount: breakdown.subscriptions, color: "bg-sky-500" },
+    { label: "Insurance", amount: breakdown.insurance, color: "bg-violet-500" },
+  ];
 
   const spentFromSalary = rows.reduce((s, r) => s + r.amount, 0);
   if (base <= 0 && spentFromSalary <= 0) return null;
@@ -71,34 +78,52 @@ function SalaryBreakdownCard({
     <Card>
       <CardContent className="p-0">
         <div className="border-b bg-violet-600 px-3 py-2">
-          <p className="text-sm font-semibold text-white">How I Spent This Month</p>
+          <p className="text-sm font-semibold text-white">Salary Breakup</p>
           <p className="text-xs text-violet-100">
             {breakdown.salaryReceived > 0
               ? `Salary received: ${formatCurrency(breakdown.salaryReceived)}`
               : breakdown.incomeReceived > 0
                 ? `Income received: ${formatCurrency(breakdown.incomeReceived)}`
                 : `Plan income: ${formatCurrency(breakdown.planIncome)}`}
+            {" · "}how it is distributed
           </p>
         </div>
         <div className="space-y-3 p-3">
           {rows.map((row) => {
-            const pct = Math.min(100, Math.round((row.amount / displayBase) * 100));
+            const pct =
+              displayBase > 0 ? Math.min(100, Math.round((row.amount / displayBase) * 100)) : 0;
             return (
               <div key={row.label}>
                 <div className="mb-1 flex items-center justify-between text-xs">
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">{row.label}</span>
+                  <span className="font-medium uppercase tracking-wide text-zinc-700 dark:text-zinc-300">
+                    {row.label}
+                  </span>
                   <span className="text-zinc-600 dark:text-zinc-400">
                     {formatCurrency(row.amount)}
                     <span className="ml-1 text-zinc-400">({pct}%)</span>
                   </span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-                  <div className={cn("h-full rounded-full", row.color)} style={{ width: `${pct}%` }} />
+                  <div
+                    className={cn("h-full rounded-full transition-all", row.color)}
+                    style={{ width: `${pct}%` }}
+                  />
                 </div>
               </div>
             );
           })}
           <div className="flex items-center justify-between border-t border-zinc-200 pt-2 text-xs font-semibold dark:border-zinc-800">
+            <span>Allocated</span>
+            <span>
+              {formatCurrency(spentFromSalary)}
+              {displayBase > 0 ? (
+                <span className="ml-1 font-normal text-zinc-400">
+                  ({Math.min(100, Math.round((spentFromSalary / displayBase) * 100))}%)
+                </span>
+              ) : null}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-xs font-semibold">
             <span className={remaining >= 0 ? "text-emerald-600" : "text-red-600"}>
               {remaining >= 0 ? "Remaining" : "Over budget"}
             </span>
@@ -106,11 +131,6 @@ function SalaryBreakdownCard({
               {formatCurrency(Math.abs(remaining))}
             </span>
           </div>
-          {(breakdown.subscriptions > 0 || breakdown.insurance > 0) && (
-            <p className="text-[10px] text-zinc-400">
-              Others includes subscriptions ({formatCurrency(breakdown.subscriptions)}) and insurance ({formatCurrency(breakdown.insurance)}).
-            </p>
-          )}
         </div>
       </CardContent>
     </Card>
@@ -462,6 +482,52 @@ export default function PlanPage() {
     load();
   };
 
+  const isFutureMonth =
+    year > now.getFullYear() ||
+    (year === now.getFullYear() && month > now.getMonth() + 1);
+
+  const copyFromPrevious = async () => {
+    if (
+      !confirm(
+        `Copy plan from previous month into ${MONTHS[month - 1]} ${year}? Income and savings targets are copied as Pending/Payable. Other payment statuses for this month reset to Pending.`
+      )
+    ) {
+      return;
+    }
+    const res = await fetch("/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "copy_previous", month, year }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Failed to copy plan");
+      return;
+    }
+    load();
+  };
+
+  const resetMonthPlan = async () => {
+    if (
+      !confirm(
+        `Reset ${MONTHS[month - 1]} ${year}? This month only — payment statuses become Pending, and savings targets are reloaded from the previous month as Payable.`
+      )
+    ) {
+      return;
+    }
+    const res = await fetch("/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "initialize_month", month, year }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Failed to reset month");
+      return;
+    }
+    load();
+  };
+
   const openEdit = (type: PlanItemType, item: ExcelPlanItem) => {
     setEditContext({ type, item });
   };
@@ -494,6 +560,20 @@ export default function PlanPage() {
             <ChevronRight className="h-5 w-5" />
           </button>
         </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" className="flex-1" onClick={copyFromPrevious}>
+            Copy from previous month
+          </Button>
+          <Button type="button" variant="outline" size="sm" className="flex-1" onClick={resetMonthPlan}>
+            Reset this month
+          </Button>
+        </div>
+        {isFutureMonth && (
+          <p className="text-center text-xs text-zinc-500">
+            Planning ahead — changes here only affect {MONTHS[month - 1]} {year}, not your current month.
+          </p>
+        )}
 
         {loading ? (
           <div className="flex justify-center py-12">
@@ -538,7 +618,7 @@ export default function PlanPage() {
                     <p className={cn("text-lg font-bold", (t?.balance ?? 0) >= 0 ? "text-emerald-600" : "text-red-600")}>
                       {formatCurrency(t?.balance ?? 0)}
                     </p>
-                    <p className="mt-0.5 text-[10px] text-zinc-400">Left after plan &amp; spend</p>
+                    <p className="mt-0.5 text-[10px] text-zinc-400">Income − Required (plan only)</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t border-emerald-200 pt-2 dark:border-emerald-900">
@@ -845,37 +925,15 @@ export default function PlanPage() {
               manageHref="/insurance"
             />
 
-            <Card>
-              <CardContent className="p-0">
-                <div className="flex items-center justify-between border-b bg-rose-600 px-3 py-2">
-                  <p className="text-sm font-semibold text-white">
-                    Other Spend (Actual) — {formatCurrency(data.otherSpend.total)}
-                  </p>
-                  <Link href="/expenses" className="text-xs text-rose-100 underline">View all →</Link>
-                </div>
-                <div className="grid grid-cols-4 gap-1 border-b bg-zinc-50 p-2 text-center text-[10px] dark:bg-zinc-900">
-                  <div><p className="text-zinc-500">Need</p><p className="font-semibold">{formatCurrency(data.otherSpend.need)}</p></div>
-                  <div><p className="text-zinc-500">Want</p><p className="font-semibold">{formatCurrency(data.otherSpend.want)}</p></div>
-                  <div><p className="text-zinc-500">Luxury</p><p className="font-semibold">{formatCurrency(data.otherSpend.luxury)}</p></div>
-                  <div><p className="text-zinc-500">Savings</p><p className="font-semibold">{formatCurrency(data.otherSpend.savings)}</p></div>
-                </div>
-                {data.otherSpend.items.length > 0 ? (
-                  <table className="w-full text-xs">
-                    <tbody>
-                      {data.otherSpend.items.slice(0, 8).map((exp) => (
-                        <tr key={exp.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                          <td className="px-2 py-2 font-medium">{exp.name}</td>
-                          <td className="px-2 py-2 text-zinc-500">{exp.category}</td>
-                          <td className="px-2 py-2 text-right">{formatCurrency(exp.amount)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <p className="p-4 text-center text-xs text-zinc-500">No expenses logged this month yet.</p>
-                )}
-              </CardContent>
-            </Card>
+            <Link
+              href="/expenses"
+              className="flex items-center justify-between rounded-xl border border-zinc-200 bg-white px-3 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+            >
+              <span className="text-zinc-600 dark:text-zinc-300">
+                Day-to-day expenses are tracked separately
+              </span>
+              <span className="font-medium text-emerald-600">Open Expenses →</span>
+            </Link>
 
             {data.insights.length > 0 && (
               <Card>

@@ -7,6 +7,7 @@ import { getUsageTrend, type UsageTrendPeriod } from "@/lib/usage-trend";
 const VALID_PERIODS: UsageTrendPeriod[] = [
   "this_month",
   "salary_cycle",
+  "last_7_days",
   "last_3_months",
   "last_6_months",
   "this_year",

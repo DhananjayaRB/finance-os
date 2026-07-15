@@ -2,10 +2,16 @@ import { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import prisma from "@/lib/db";
 import { jsonOk, jsonError } from "@/lib/api-utils";
-import { getCurrentMonthYear } from "@/lib/utils";
+import { getCurrentMonthYear, decimalToNumber } from "@/lib/utils";
 import { deleteForUser } from "@/lib/prisma-helpers";
 import { applyExpenseToSource, reverseExpenseFromSource } from "@/lib/account-ledger";
 import { isBankPayment } from "@/lib/constants";
+import {
+  EXPENSE_AREAS,
+  getExpenseAreaMeta,
+  resolveExpenseArea,
+} from "@/lib/expense-areas";
+import { remapExpenseMerchants } from "@/lib/expense-merchant-remap";
 import type { ExpenseClass, PaymentMethod } from "@/generated/prisma/client";
 
 const expenseInclude = {
@@ -19,19 +25,93 @@ export async function GET(request: NextRequest) {
   if (!session) return jsonError("Unauthorized", 401);
 
   const { searchParams } = new URL(request.url);
-  const { month, year } = getCurrentMonthYear();
+  const { month: curMonth, year: curYear } = getCurrentMonthYear();
+  const month = parseInt(searchParams.get("month") || String(curMonth));
+  const year = parseInt(searchParams.get("year") || String(curYear));
 
-  const expenses = await prisma.expense.findMany({
-    where: {
-      userId: session.userId,
-      month: parseInt(searchParams.get("month") || String(month)),
-      year: parseInt(searchParams.get("year") || String(year)),
+  // Remap free-text merchants → areas (non-fatal — never block listing)
+  if (searchParams.get("remap") === "1") {
+    try {
+      const result = await remapExpenseMerchants(session.userId);
+      return jsonOk(result);
+    } catch (err) {
+      console.error("Merchant remap failed:", err);
+      return jsonError("Merchant remap failed", 500);
+    }
+  }
+
+  try {
+    await remapExpenseMerchants(session.userId);
+  } catch (err) {
+    console.error("Merchant remap skipped (expenses still returned):", err);
+  }
+
+  const [expenses, dhanuCandidates] = await Promise.all([
+    prisma.expense.findMany({
+      where: { userId: session.userId, month, year },
+      include: expenseInclude,
+      orderBy: { date: "desc" },
+    }),
+    prisma.fixedExpense.findMany({
+      where: {
+        userId: session.userId,
+        name: { contains: "Dhanu Expense", mode: "insensitive" },
+      },
+    }),
+  ]);
+
+  const byMerchantMap = new Map<string, number>();
+  for (const area of EXPENSE_AREAS) byMerchantMap.set(area.name, 0);
+  for (const exp of expenses) {
+    const area = resolveExpenseArea(exp.merchant, exp.notes, exp.category?.name);
+    byMerchantMap.set(area, (byMerchantMap.get(area) || 0) + decimalToNumber(exp.amount));
+  }
+  const byMerchant = EXPENSE_AREAS.map((a) => ({
+    name: a.name,
+    icon: a.icon,
+    amount: byMerchantMap.get(a.name) || 0,
+  }));
+
+  const dhanu =
+    dhanuCandidates.find((f) => f.category === "HOME") ||
+    dhanuCandidates.find((f) => f.category !== "MONTHLY_FIXED") ||
+    dhanuCandidates[0] ||
+    null;
+
+  let plannedAmount = 0;
+  if (dhanu) {
+    const templateAmount = Number(dhanu.amount) || 0;
+    const monthRows = await prisma.planMonthPayment.findMany({
+      where: {
+        userId: session.userId,
+        month,
+        year,
+        sourceId: dhanu.id,
+      },
+    });
+    const homeRow =
+      monthRows.find((r) => r.sourceType === "HOME") || monthRows[0] || null;
+    const monthAmount = homeRow ? Number(homeRow.amount) || 0 : 0;
+    plannedAmount = monthAmount > 0 ? monthAmount : templateAmount;
+
+    if (homeRow && monthAmount <= 0 && templateAmount > 0) {
+      await prisma.planMonthPayment.update({
+        where: { id: homeRow.id },
+        data: { amount: templateAmount },
+      });
+      plannedAmount = templateAmount;
+    }
+  }
+
+  return jsonOk({
+    expenses,
+    byMerchant,
+    plannedExpense: {
+      name: dhanu?.name || "Dhanu Expense",
+      amount: plannedAmount,
+      sourceId: dhanu?.id || null,
     },
-    include: expenseInclude,
-    orderBy: { date: "desc" },
   });
-
-  return jsonOk(expenses);
 }
 
 export async function POST(request: NextRequest) {
@@ -66,13 +146,27 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const rawMerchant = String(body.merchant || "").trim();
+  const merchantDetail = body.merchantDetail
+    ? String(body.merchantDetail).trim()
+    : null;
+  const area = resolveExpenseArea(rawMerchant, body.notes, null);
+  const areaMeta = getExpenseAreaMeta(area);
+  const classification =
+    body.classification || areaMeta.classification || "NEED";
+
   const expense = await prisma.expense.create({
     data: {
       userId: session.userId,
       amount,
-      merchant: body.merchant,
+      merchant: area,
+      merchantDetail:
+        merchantDetail ||
+        (rawMerchant && rawMerchant.toLowerCase() !== area.toLowerCase()
+          ? rawMerchant
+          : null),
       categoryId: body.categoryId,
-      classification: body.classification || "NEED",
+      classification,
       paymentMethod,
       accountId: accountId || body.accountId || null,
       cashBoxId: cashBoxId || body.cashBoxId || null,
@@ -177,7 +271,23 @@ export async function PUT(request: NextRequest) {
   }
 
   const data: Record<string, unknown> = { accountId, cashBoxId };
-  if (rest.merchant !== undefined) data.merchant = String(rest.merchant).trim() || null;
+  if (rest.merchant !== undefined) {
+    const raw = String(rest.merchant).trim();
+    const area = resolveExpenseArea(raw, rest.notes ?? existing.notes, null);
+    data.merchant = area;
+    if (rest.merchantDetail !== undefined) {
+      data.merchantDetail = rest.merchantDetail
+        ? String(rest.merchantDetail).trim()
+        : null;
+    } else if (raw && raw.toLowerCase() !== area.toLowerCase() && !existing.merchantDetail) {
+      data.merchantDetail = raw;
+    }
+  }
+  if (rest.merchantDetail !== undefined && rest.merchant === undefined) {
+    data.merchantDetail = rest.merchantDetail
+      ? String(rest.merchantDetail).trim()
+      : null;
+  }
   if (rest.amount !== undefined) data.amount = newAmount;
   if (rest.classification !== undefined) data.classification = rest.classification as ExpenseClass;
   if (rest.paymentMethod !== undefined) data.paymentMethod = newPaymentMethod;

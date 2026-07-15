@@ -140,6 +140,15 @@ enum InsuranceType {
   OTHER
 }
 
+enum PlanPaymentSourceType {
+  LOAN
+  HOME
+  MONTHLY_FIXED
+  SUBSCRIPTION
+  INSURANCE
+  SAVING
+}
+
 enum AccountTxType {
   CREDIT
   DEBIT
@@ -177,6 +186,7 @@ model User {
   insurances     Insurance[]
   accountTransactions AccountTransaction[]
   savingEntries  SavingEntry[]
+  planMonthPayments PlanMonthPayment[]
 }
 
 model Account {
@@ -252,6 +262,7 @@ model Expense {
   classification ExpenseClass @default(NEED)
   paymentMethod PaymentMethod @default(UPI)
   notes         String?
+  merchantDetail String?
   receiptUrl    String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
@@ -487,6 +498,25 @@ model Budget {
 
   @@unique([userId, year, month])
   @@index([userId])
+}
+
+model PlanMonthPayment {
+  id            String                @id @default(cuid())
+  userId        String
+  month         Int
+  year          Int
+  sourceType    PlanPaymentSourceType
+  sourceId      String
+  amount        Decimal               @db.Decimal(14, 2)
+  payableAmount Decimal               @default(0) @db.Decimal(14, 2)
+  paymentStatus PaymentStatus         @default(PENDING)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, month, year, sourceType, sourceId])
+  @@index([userId, year, month])
 }
 
 model Goal {

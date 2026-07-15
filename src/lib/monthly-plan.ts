@@ -3,7 +3,7 @@ import { updateForUser, deleteForUser } from "@/lib/prisma-helpers";
 import { parseLoanType } from "@/lib/constants";
 import { formatPrismaError } from "@/lib/prisma-errors";
 import { decimalToNumber, formatCurrency } from "@/lib/utils";
-import { computePaymentStatus, isBeforeSalary, getStatusMeta, resolveDisplayStatus } from "@/lib/payment-status";
+import { computePaymentStatus, isBeforeSalary, getStatusMeta, resolveDisplayStatus, PAYMENT_STATUS_META } from "@/lib/payment-status";
 import { insuranceMonthlyAmount } from "@/lib/account-ledger";
 import {
   getPlanPayableState,
@@ -12,144 +12,36 @@ import {
   syncPayableLedgerDelta,
   syncPlanItemCreateLedger,
   syncPlanItemDeleteLedger,
+  getMonthPlanPayableState,
+  resolveMonthRowPayable,
 } from "@/lib/plan-ledger-sync";
+import {
+  ensureMonthPlanPayments,
+  getMonthPaymentMap,
+  monthPaymentKey,
+  planItemTypeToSourceType,
+  planPayableTypeToSourceType,
+  getMonthPaymentForItem,
+  updateMonthPayment,
+  createMonthPaymentForNewItem,
+  deleteMonthPaymentsForSource,
+  resetMonthPlanPayments,
+  copyIncomeToMonth,
+  ensureMonthSavingsPlan,
+} from "@/lib/plan-month-payments";
 import { buildPlanAlerts } from "@/lib/plan-alerts";
 import type { PaymentStatus } from "@/generated/prisma/client";
+import type {
+  ExcelPlanItem,
+  ExcelMonthlyPlan,
+  PlanItemType,
+} from "@/lib/monthly-plan-types";
 
-export interface ExcelPlanItem {
-  id: string;
-  name: string;
-  amount: number;
-  outstanding?: number;
-  pendingEmi?: number;
-  emiDate?: number;
-  interestRate?: number;
-  payable: number;
-  paymentStatus: PaymentStatus;
-  statusLabel: string;
-  statusColor: string;
-  beforeSalary: boolean;
-  loanType?: string;
-  incomeType?: string;
-  insuranceType?: string;
-  savingType?: string;
-  savingSource?: "plan" | "entry";
-  savingKind?: "DEPOSIT" | "WITHDRAWAL" | "MISSED";
-  isReceived?: boolean;
-  category?: string;
-}
-
-export interface ExcelMonthlyPlan {
-  month: number;
-  year: number;
-  monthLabel: string;
-  salaryCycle: string;
-  salaryDay: number;
-  currentDay: number;
-
-  income: {
-    planTotal: number;
-    sources: ExcelPlanItem[];
-    breakdownTotal: number;
-    subTotalOther: number;
-  };
-
-  loans: ExcelPlanItem[];
-  homeExpenses: ExcelPlanItem[];
-  savings: ExcelPlanItem[];
-  monthlyFixedExpenses: ExcelPlanItem[];
-  subscriptions: ExcelPlanItem[];
-  insurances: ExcelPlanItem[];
-  actualSavings: {
-    total: number;
-    deposited: number;
-    withdrawn: number;
-    missed: number;
-    entries: {
-      id: string;
-      name: string;
-      type: string;
-      kind: string;
-      amount: number;
-      date: string;
-    }[];
-    byType: { type: string; total: number }[];
-  };
-  otherSpend: {
-    total: number;
-    need: number;
-    want: number;
-    luxury: number;
-    savings: number;
-    items: ExcelPlanItem[];
-  };
-
-  totals: {
-    loanEmi: number;
-    loanOutstanding: number;
-    loanPayable: number;
-    homeTotal: number;
-    homePayable: number;
-    savingsTotal: number;
-    savingsPayable: number;
-    fixedTotal: number;
-    fixedPayable: number;
-    subscriptionTotal: number;
-    subscriptionPayable: number;
-    insuranceTotal: number;
-    insurancePayable: number;
-    otherSpendTotal: number;
-    allPayable: number;
-    totalRequired: number;
-    balance: number;
-    savingsDeposited: number;
-    savingsWithdrawn: number;
-    savingsMissed: number;
-    savingsNetSaved: number;
-    savingsStillToSave: number;
-    beforeSalary: {
-      loan: number;
-      home: number;
-      savings: number;
-      fixed: number;
-      subscriptions: number;
-      insurance: number;
-      total: number;
-    };
-    afterSalary: {
-      loan: number;
-      home: number;
-      savings: number;
-      fixed: number;
-      subscriptions: number;
-      insurance: number;
-      total: number;
-    };
-  };
-
-  insights: { type: string; title: string; message: string; action?: string }[];
-  history: { label: string; planned: number; actual: number; gap: number }[];
-  salaryBreakdown: {
-    incomeReceived: number;
-    salaryReceived: number;
-    planIncome: number;
-    emi: number;
-    homeExpense: number;
-    fixedExpense: number;
-    subscriptions: number;
-    insurance: number;
-    savingsLogged: number;
-    otherExpenses: number;
-    totalSpent: number;
-    remaining: number;
-  };
-  consolidated: {
-    bankBalance: number;
-    cashInHand: number;
-    totalLiquidity: number;
-  };
-  planAlerts: { type: string; title: string; message: string; category: string }[];
-}
+export type {
+  ExcelPlanItem,
+  ExcelMonthlyPlan,
+  PlanItemType,
+} from "@/lib/monthly-plan-types";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -411,6 +303,37 @@ function mapInsurance(
   };
 }
 
+function overlayMonthPayment(
+  item: ExcelPlanItem,
+  payment?: {
+    amount: unknown;
+    payableAmount: unknown;
+    paymentStatus: PaymentStatus;
+  }
+): ExcelPlanItem {
+  if (!payment) return item;
+  const amount = decimalToNumber(payment.amount as string | number);
+  let payable = decimalToNumber(payment.payableAmount as string | number);
+  if (payable <= 0 && payment.paymentStatus !== "PAID" && amount > 0) {
+    payable = amount;
+  }
+  if (payment.paymentStatus === "PAID") payable = 0;
+  const paymentStatus = resolveDisplayStatus({
+    stored: payment.paymentStatus,
+    payable,
+    isClosed: payment.paymentStatus === "CLOSED",
+  });
+  const meta = getStatusMeta(paymentStatus);
+  return {
+    ...item,
+    amount,
+    payable,
+    paymentStatus,
+    statusLabel: meta.label,
+    statusColor: meta.color,
+  };
+}
+
 export async function getExcelMonthlyPlan(
   userId: string,
   month: number,
@@ -424,7 +347,10 @@ export async function getExcelMonthlyPlan(
   const user = await prisma.user.findUnique({ where: { id: userId } });
   const salaryDay = user?.salaryDay ?? 7;
 
-  const [loans, homeExpenses, monthlyFixed, savings, savingEntries, incomes, subscriptions, insurances, expenses, budget, accounts, cashBoxes] =
+  await ensureMonthPlanPayments(userId, month, year);
+  await ensureMonthSavingsPlan(userId, month, year);
+
+  const [loans, homeExpenses, monthlyFixed, savings, savingEntries, incomes, subscriptions, insurances, expenses, budget, accounts, cashBoxes, monthPayments] =
     await Promise.all([
       prisma.loan.findMany({
         where: { userId, status: { not: "CLOSED" } },
@@ -454,21 +380,48 @@ export async function getExcelMonthlyPlan(
       prisma.budget.findUnique({ where: { userId_year_month: { userId, year, month } } }),
       prisma.account.findMany({ where: { userId } }),
       prisma.cashBox.findMany({ where: { userId } }),
+      getMonthPaymentMap(userId, month, year),
     ]);
 
   const bankBalance = accounts.reduce((s, a) => s + decimalToNumber(a.balance), 0);
   const cashInHand = cashBoxes.reduce((s, c) => s + decimalToNumber(c.balance), 0);
 
-  const loanItems = loans.map((l) => mapLoan(l, salaryDay, currentDay));
+  const loanItems = loans.map((l) =>
+    overlayMonthPayment(
+      mapLoan(l, salaryDay, currentDay),
+      monthPayments.get(monthPaymentKey("LOAN", l.id))
+    )
+  );
   const homeItems = homeExpenses
     .filter((f) => f.category === "HOME" || !f.category)
-    .map((f) => mapFixedExpense(f, salaryDay, currentDay));
-  const fixedItems = monthlyFixed.map((f) => mapFixedExpense(f, salaryDay, currentDay));
-  const savingItems = savings.map((s) => mapSaving(s, salaryDay, currentDay));
-  const planSavingsRows = savingItems.map((s) => ({ ...s, savingSource: "plan" as const }));
+    .map((f) =>
+      overlayMonthPayment(
+        mapFixedExpense(f, salaryDay, currentDay),
+        monthPayments.get(monthPaymentKey("HOME", f.id))
+      )
+    );
+  const fixedItems = monthlyFixed.map((f) =>
+    overlayMonthPayment(
+      mapFixedExpense(f, salaryDay, currentDay),
+      monthPayments.get(monthPaymentKey("MONTHLY_FIXED", f.id))
+    )
+  );
+  const savingItems = savings.map((s) =>
+    overlayMonthPayment(
+      mapSaving(s, salaryDay, currentDay),
+      monthPayments.get(monthPaymentKey("SAVING", s.id))
+    )
+  );
   const loggedSavingsRows: ExcelPlanItem[] = savingEntries.map((e) =>
     mapSavingEntry(e, salaryDay)
   );
+  // Prefer month entries; only show master goals that aren't already listed as entries
+  const entryNames = new Set(
+    loggedSavingsRows.map((e) => e.name.trim().toLowerCase())
+  );
+  const planSavingsRows = savingItems
+    .filter((s) => !entryNames.has(s.name.trim().toLowerCase()))
+    .map((s) => ({ ...s, savingSource: "plan" as const }));
   const allSavingsRows = [...planSavingsRows, ...loggedSavingsRows];
 
   const incomeSources: ExcelPlanItem[] = incomes.map((inc) => {
@@ -492,30 +445,29 @@ export async function getExcelMonthlyPlan(
 
   const subItems: ExcelPlanItem[] = subscriptions.map((sub) => {
     const amount = decimalToNumber(sub.amount);
-    let payable = decimalToNumber(sub.payableAmount);
-    const storedStatus = sub.paymentStatus;
-    if (payable <= 0 && storedStatus !== "PAID" && amount > 0) {
-      payable = amount;
-    }
-    const paymentStatus = resolveDisplayStatus({
-      stored: sub.paymentStatus,
-      payable,
-    });
-    const meta = getStatusMeta(paymentStatus);
-    return {
+    const base: ExcelPlanItem = {
       id: sub.id,
       name: sub.name,
       amount,
-      payable,
-      paymentStatus,
-      statusLabel: meta.label,
-      statusColor: meta.color,
+      payable: amount,
+      paymentStatus: "PENDING",
+      statusLabel: PAYMENT_STATUS_META.PENDING.label,
+      statusColor: PAYMENT_STATUS_META.PENDING.color,
       beforeSalary: isBeforeSalary(sub.renewalDay ?? salaryDay, salaryDay),
       emiDate: sub.renewalDay ?? undefined,
     };
+    return overlayMonthPayment(
+      base,
+      monthPayments.get(monthPaymentKey("SUBSCRIPTION", sub.id))
+    );
   });
 
-  const insuranceItems = insurances.map((ins) => mapInsurance(ins, salaryDay, currentDay));
+  const insuranceItems = insurances.map((ins) =>
+    overlayMonthPayment(
+      mapInsurance(ins, salaryDay, currentDay),
+      monthPayments.get(monthPaymentKey("INSURANCE", ins.id))
+    )
+  );
 
   const savingsDeposited = savingEntries
     .filter((e) => e.kind === "DEPOSIT" && e.paymentStatus === "PAID")
@@ -594,7 +546,8 @@ export async function getExcelMonthlyPlan(
     loanEmi + homeTotal + savingsCommitted + fixedTotal + subscriptionTotal + insuranceTotal;
   const allPayable =
     loanPayable + homePayable + savingsPayable + fixedPayable + subscriptionPayable + insurancePayable;
-  const balance = planIncome - totalRequired - otherSpendTotal;
+  // Plan balance = income vs plan commitments only (expenses tracked separately)
+  const balance = planIncome - totalRequired;
 
   const incomeReceived = incomeSources
     .filter((i) => i.isReceived)
@@ -613,15 +566,14 @@ export async function getExcelMonthlyPlan(
     subscriptions: subscriptionTotal,
     insurance: insuranceTotal,
     savingsLogged: actualSavingsTotal,
-    otherExpenses: otherSpendTotal,
+    otherExpenses: 0, // tracked on Expenses page — not part of monthly plan
     totalSpent:
       loanEmi +
       homeTotal +
       fixedTotal +
       subscriptionTotal +
       insuranceTotal +
-      actualSavingsTotal +
-      otherSpendTotal,
+      actualSavingsTotal,
     remaining:
       incomeReceived -
       (loanEmi +
@@ -629,8 +581,7 @@ export async function getExcelMonthlyPlan(
         fixedTotal +
         subscriptionTotal +
         insuranceTotal +
-        actualSavingsTotal +
-        otherSpendTotal),
+        actualSavingsTotal),
   };
 
   const beforeSalary = {
@@ -775,7 +726,7 @@ function generateInsights(params: {
     insights.push({
       type: "critical",
       title: "Deficit Alert",
-      message: `Shortfall of ${formatCurrency(Math.abs(params.balance))}. Reduce Want/Luxury or defer non-essential payments.`,
+      message: `Shortfall of ${formatCurrency(Math.abs(params.balance))}. Reduce plan commitments or increase income.`,
     });
   }
 
@@ -818,11 +769,13 @@ function generateInsights(params: {
 
 export async function markItemPaid(
   userId: string,
+  month: number,
+  year: number,
   type: "loan" | "home" | "saving" | "insurance" | "income" | "subscription",
   id: string
 ) {
   if (type === "income") {
-    const before = await prisma.income.findFirst({ where: { id, userId } });
+    const before = await prisma.income.findFirst({ where: { id, userId, month, year } });
     if (!before) return null;
     const result = await updateForUser("income", userId, id, { isReceived: true });
     if (!result) return null;
@@ -840,73 +793,42 @@ export async function markItemPaid(
     return result;
   }
 
-  const before = await getPlanPayableState(userId, type, id);
-  if (!before || before.skipLedger) {
-    if (type === "loan") {
-      return updateForUser("loan", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-    }
-    if (type === "home") {
-      return updateForUser("fixedExpense", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-    }
-    if (type === "insurance") {
-      return updateForUser("insurance", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-    }
-    if (type === "subscription") {
-      return updateForUser("subscription", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-    }
-    if (type === "saving") {
-      const plan = await updateForUser("saving", userId, id, {
-        payableAmount: 0,
-        paymentStatus: "PAID",
-        isPayable: false,
-      });
-      if (plan) return plan;
-      return updateForUser("savingEntry", userId, id, {
+  if (type === "saving") {
+    const entry = await prisma.savingEntry.findFirst({ where: { id, userId, month, year } });
+    if (entry) {
+      const before = await getPlanPayableState(userId, "saving", id);
+      const result = await updateForUser("savingEntry", userId, id, {
         payableAmount: 0,
         paymentStatus: "PAID",
       });
-    }
-    return null;
-  }
-
-  let result: unknown = null;
-  if (type === "loan") {
-    result = await updateForUser("loan", userId, id, { payableAmount: 0, paymentStatus: "PAID" });
-  } else if (type === "home") {
-    result = await updateForUser("fixedExpense", userId, id, {
-      payableAmount: 0,
-      paymentStatus: "PAID",
-    });
-  } else if (type === "insurance") {
-    result = await updateForUser("insurance", userId, id, {
-      payableAmount: 0,
-      paymentStatus: "PAID",
-    });
-  } else if (type === "subscription") {
-    result = await updateForUser("subscription", userId, id, {
-      payableAmount: 0,
-      paymentStatus: "PAID",
-    });
-  } else if (type === "saving") {
-    result = await updateForUser("saving", userId, id, {
-      payableAmount: 0,
-      paymentStatus: "PAID",
-      isPayable: false,
-    });
-    if (!result) {
-      result = await updateForUser("savingEntry", userId, id, {
-        payableAmount: 0,
-        paymentStatus: "PAID",
+      if (!result || !before || before.skipLedger) return result;
+      await syncPayableLedgerDelta({
+        userId,
+        refType: before.refType,
+        refId: id,
+        previousPayable: before.payable,
+        newPayable: 0,
+        label: before.label,
       });
+      return result;
     }
   }
 
+  const sourceType = planPayableTypeToSourceType(type);
+  const monthRow = await getMonthPaymentForItem(userId, month, year, sourceType, id);
+  if (!monthRow) return null;
+
+  const before = await getMonthPlanPayableState(monthRow);
+  const result = await updateMonthPayment(userId, month, year, sourceType, id, {
+    paymentStatus: "PAID",
+    payableAmount: 0,
+  });
   if (!result) return null;
 
   await syncPayableLedgerDelta({
     userId,
-    refType: before.refType,
-    refId: id,
+    refType: "plan_month",
+    refId: monthRow.id,
     previousPayable: before.payable,
     newPayable: 0,
     label: before.label,
@@ -915,17 +837,10 @@ export async function markItemPaid(
   return result;
 }
 
-export type PlanItemType =
-  | "loan"
-  | "home"
-  | "saving"
-  | "income"
-  | "subscription"
-  | "monthly_fixed"
-  | "insurance";
-
 export async function updatePlanItem(
   userId: string,
+  month: number,
+  year: number,
   type: PlanItemType,
   id: string,
   data: Record<string, unknown>
@@ -938,7 +853,9 @@ export async function updatePlanItem(
         if (data.loanType !== undefined && !loanType) {
           throw new Error(`Invalid loan type: ${data.loanType}`);
         }
-        const before = await getPlanPayableState(userId, "loan", id);
+        const monthRow = await getMonthPaymentForItem(userId, month, year, "LOAN", id);
+        const before = monthRow ? await getMonthPlanPayableState(monthRow) : null;
+
         const result = await updateForUser("loan", userId, id, {
           ...(data.name !== undefined && { name: String(data.name) }),
           ...(data.emiAmount !== undefined && { emiAmount: Number(data.emiAmount) }),
@@ -946,13 +863,92 @@ export async function updatePlanItem(
           ...(data.pendingEmi !== undefined && { pendingEmi: Number(data.pendingEmi) }),
           ...(data.emiDate !== undefined && { emiDate: Number(data.emiDate) }),
           ...(data.interestRate !== undefined && { interestRate: Number(data.interestRate) }),
-          ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
           ...(loanType !== undefined && { loanType }),
-          ...(paymentStatus !== undefined && { paymentStatus }),
           ...(paymentStatus === "CLOSED" && { status: "CLOSED" }),
-          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
         });
         if (!result) throw new Error("Loan not found");
+
+        if (monthRow) {
+          const newAmount =
+            data.emiAmount !== undefined ? Number(data.emiAmount) : decimalToNumber(monthRow.amount);
+          const monthResult = await updateMonthPayment(userId, month, year, "LOAN", id, {
+            amount: newAmount,
+            ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+            ...(paymentStatus !== undefined && { paymentStatus }),
+          });
+          if (monthResult && before) {
+            const newPayable = resolveMonthRowPayable(monthResult);
+            if (before.payable !== newPayable) {
+              await syncPayableLedgerDelta({
+                userId,
+                refType: "plan_month",
+                refId: monthResult.id,
+                previousPayable: before.payable,
+                newPayable,
+                label: before.label,
+              });
+            }
+          }
+        }
+        return result;
+      }
+    case "home":
+    case "monthly_fixed": {
+      const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+      const sourceType = type === "home" ? "HOME" : "MONTHLY_FIXED";
+      const monthRow = await getMonthPaymentForItem(userId, month, year, sourceType, id);
+      const before = monthRow ? await getMonthPlanPayableState(monthRow) : null;
+
+      const result = await updateForUser("fixedExpense", userId, id, {
+        ...(data.name !== undefined && { name: String(data.name) }),
+        ...(data.amount !== undefined && { amount: Number(data.amount) }),
+        ...(data.dueDay !== undefined && { dueDay: Number(data.dueDay) }),
+      });
+      if (!result) throw new Error("Item not found");
+
+      if (monthRow) {
+        const newAmount =
+          data.amount !== undefined ? Number(data.amount) : decimalToNumber(monthRow.amount);
+        const monthResult = await updateMonthPayment(userId, month, year, sourceType, id, {
+          amount: newAmount,
+          ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+          ...(paymentStatus !== undefined && { paymentStatus }),
+        });
+        if (monthResult && before) {
+          const newPayable = resolveMonthRowPayable(monthResult);
+          if (before.payable !== newPayable) {
+            await syncPayableLedgerDelta({
+              userId,
+              refType: "plan_month",
+              refId: monthResult.id,
+              previousPayable: before.payable,
+              newPayable,
+              label: before.label,
+            });
+          }
+        }
+      }
+      return result;
+    }
+    case "saving": {
+      const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
+      const amount = Number(data.amount) || 0;
+      let payableAmount =
+        data.payableAmount !== undefined ? Number(data.payableAmount) : amount;
+      if (paymentStatus === "PAID") payableAmount = 0;
+      else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
+
+      const entry = await prisma.savingEntry.findFirst({ where: { id, userId, month, year } });
+      if (entry) {
+        const before = await getPlanPayableState(userId, "saving", id);
+        const result = await updateForUser("savingEntry", userId, id, {
+          ...(data.name !== undefined && { name: String(data.name) }),
+          ...(data.amount !== undefined && { amount }),
+          payableAmount,
+          ...(paymentStatus !== undefined && { paymentStatus }),
+          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
+        });
+        if (!result) throw new Error("Item not found");
         if (before && !before.skipLedger) {
           await syncPayableLedgerDelta({
             userId,
@@ -965,69 +961,35 @@ export async function updatePlanItem(
         }
         return result;
       }
-    case "home":
-    case "monthly_fixed": {
-      const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
-      const before =
-        type === "home" ? await getPlanPayableState(userId, "home", id) : null;
-      const result = await updateForUser("fixedExpense", userId, id, {
-        ...(data.name !== undefined && { name: String(data.name) }),
-        ...(data.amount !== undefined && { amount: Number(data.amount) }),
-        ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
-        ...(data.dueDay !== undefined && { dueDay: Number(data.dueDay) }),
-        ...(paymentStatus !== undefined && { paymentStatus }),
-        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
-      });
-      if (!result) throw new Error("Item not found");
-      if (before && !before.skipLedger) {
-        await syncPayableLedgerDelta({
-          userId,
-          refType: before.refType,
-          refId: id,
-          previousPayable: before.payable,
-          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
-          label: before.label,
-        });
-      }
-      return result;
-    }
-    case "saving": {
-      const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
-      const amount = Number(data.amount) || 0;
-      let payableAmount =
-        data.payableAmount !== undefined ? Number(data.payableAmount) : amount;
-      if (paymentStatus === "PAID") payableAmount = 0;
-      else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
 
-      const before = await getPlanPayableState(userId, "saving", id);
-      let result = await updateForUser("saving", userId, id, {
+      const monthRow = await getMonthPaymentForItem(userId, month, year, "SAVING", id);
+      const before = monthRow ? await getMonthPlanPayableState(monthRow) : null;
+      const result = await updateForUser("saving", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { amount }),
-        payableAmount,
         ...(data.savingType !== undefined && { type: data.savingType }),
-        ...(paymentStatus !== undefined && { paymentStatus }),
-        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
-        isPayable: payableAmount > 0,
       });
-      if (!result) {
-        result = await updateForUser("savingEntry", userId, id, {
-          ...(data.name !== undefined && { name: String(data.name) }),
-          ...(data.amount !== undefined && { amount }),
+      if (!result) throw new Error("Item not found");
+
+      if (monthRow) {
+        const monthResult = await updateMonthPayment(userId, month, year, "SAVING", id, {
+          amount,
           payableAmount,
           ...(paymentStatus !== undefined && { paymentStatus }),
-          ...(paymentStatus === "PAID" && { payableAmount: 0 }),
         });
-      }
-      if (!result) throw new Error("Item not found");
-      if (before && !before.skipLedger) {
-        await syncPayableLedgerDelta({
-          userId,
-          refType: before.refType,
-          refId: id,
-          previousPayable: before.payable,
-          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
-          label: before.label,
-        });
+        if (monthResult && before) {
+          const newPayable = resolveMonthRowPayable(monthResult);
+          if (before.payable !== newPayable) {
+            await syncPayableLedgerDelta({
+              userId,
+              refType: "plan_month",
+              refId: monthResult.id,
+              previousPayable: before.payable,
+              newPayable,
+              label: before.label,
+            });
+          }
+        }
       }
       return result;
     }
@@ -1069,50 +1031,72 @@ export async function updatePlanItem(
       if (paymentStatus === "PAID") payableAmount = 0;
       else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
 
-      const before = await getPlanPayableState(userId, "subscription", id);
+      const monthRow = await getMonthPaymentForItem(userId, month, year, "SUBSCRIPTION", id);
+      const before = monthRow ? await getMonthPlanPayableState(monthRow) : null;
+
       const result = await updateForUser("subscription", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { amount }),
-        payableAmount,
         ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
-        ...(paymentStatus !== undefined && { paymentStatus }),
-        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
       if (!result) throw new Error("Item not found");
-      if (before && !before.skipLedger) {
-        await syncPayableLedgerDelta({
-          userId,
-          refType: before.refType,
-          refId: id,
-          previousPayable: before.payable,
-          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
-          label: before.label,
+
+      if (monthRow) {
+        const monthResult = await updateMonthPayment(userId, month, year, "SUBSCRIPTION", id, {
+          amount,
+          payableAmount,
+          ...(paymentStatus !== undefined && { paymentStatus }),
         });
+        if (monthResult && before) {
+          const newPayable = resolveMonthRowPayable(monthResult);
+          if (before.payable !== newPayable) {
+            await syncPayableLedgerDelta({
+              userId,
+              refType: "plan_month",
+              refId: monthResult.id,
+              previousPayable: before.payable,
+              newPayable,
+              label: before.label,
+            });
+          }
+        }
       }
       return result;
     }
     case "insurance": {
       const paymentStatus = data.paymentStatus as PaymentStatus | undefined;
-      const before = await getPlanPayableState(userId, "insurance", id);
+      const monthRow = await getMonthPaymentForItem(userId, month, year, "INSURANCE", id);
+      const before = monthRow ? await getMonthPlanPayableState(monthRow) : null;
+
       const result = await updateForUser("insurance", userId, id, {
         ...(data.name !== undefined && { name: String(data.name) }),
         ...(data.amount !== undefined && { premium: Number(data.amount) }),
-        ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
         ...(data.renewalDay !== undefined && { renewalDay: Number(data.renewalDay) }),
         ...(data.insuranceType !== undefined && { insuranceType: data.insuranceType }),
-        ...(paymentStatus !== undefined && { paymentStatus }),
-        ...(paymentStatus === "PAID" && { payableAmount: 0 }),
       });
       if (!result) throw new Error("Item not found");
-      if (before && !before.skipLedger) {
-        await syncPayableLedgerDelta({
-          userId,
-          refType: before.refType,
-          refId: id,
-          previousPayable: before.payable,
-          newPayable: resolvePayableFromRecord(before.refType, result as Record<string, unknown>),
-          label: before.label,
+
+      if (monthRow) {
+        const newAmount =
+          data.amount !== undefined ? Number(data.amount) : decimalToNumber(monthRow.amount);
+        const monthResult = await updateMonthPayment(userId, month, year, "INSURANCE", id, {
+          amount: newAmount,
+          ...(data.payableAmount !== undefined && { payableAmount: Number(data.payableAmount) }),
+          ...(paymentStatus !== undefined && { paymentStatus }),
         });
+        if (monthResult && before) {
+          const newPayable = resolveMonthRowPayable(monthResult);
+          if (before.payable !== newPayable) {
+            await syncPayableLedgerDelta({
+              userId,
+              refType: "plan_month",
+              refId: monthResult.id,
+              previousPayable: before.payable,
+              newPayable,
+              label: before.label,
+            });
+          }
+        }
       }
       return result;
     }
@@ -1126,6 +1110,8 @@ export async function updatePlanItem(
 
 export async function createPlanItem(
   userId: string,
+  month: number,
+  year: number,
   type: PlanItemType,
   data: Record<string, unknown>
 ) {
@@ -1140,6 +1126,10 @@ export async function createPlanItem(
     if (paymentStatus === "PAID") payableAmount = 0;
     else if (payableAmount <= 0 && amount > 0) payableAmount = amount;
 
+    const itemMonth = Number(data.month) || month;
+    const itemYear = Number(data.year) || year;
+    const sourceType = planItemTypeToSourceType(type);
+
     switch (type) {
       case "saving": {
         const created = await prisma.saving.create({
@@ -1148,34 +1138,68 @@ export async function createPlanItem(
             name,
             type: (data.savingType as "SIP" | "GOLD" | "PF" | "OTHER") || "SIP",
             amount,
-            payableAmount,
-            paymentStatus,
-            isPayable: payableAmount > 0,
+            payableAmount: 0,
+            paymentStatus: "PENDING",
+            isPayable: true,
           },
         });
-        await syncPlanItemCreateLedger(userId, "saving", created as unknown as Record<string, unknown>);
+        if (sourceType) {
+          const monthRow = await createMonthPaymentForNewItem(
+            userId,
+            itemMonth,
+            itemYear,
+            sourceType,
+            created.id,
+            amount,
+            payableAmount,
+            paymentStatus
+          );
+          await syncPlanItemCreateLedger(userId, "saving", {
+            ...(created as unknown as Record<string, unknown>),
+            id: monthRow.id,
+            amount,
+            payableAmount,
+            paymentStatus,
+          });
+        }
         return created;
       }
       case "loan": {
         const loanType = parseLoanType(data.loanType) || "PERSONAL";
+        const emiAmount = Number(data.emiAmount ?? data.amount) || 0;
         const created = await prisma.loan.create({
           data: {
             userId,
             name,
-            emiAmount: Number(data.emiAmount ?? data.amount) || 0,
+            emiAmount,
             outstanding: Number(data.outstanding) || 0,
             pendingEmi: Number(data.pendingEmi) || 12,
             emiDate: Number(data.emiDate) || 5,
             interestRate: Number(data.interestRate) || 12,
-            payableAmount,
-            paymentStatus,
+            payableAmount: 0,
+            paymentStatus: "PENDING",
             loanType,
           },
         });
-        await syncPlanItemCreateLedger(userId, "loan", {
-          ...(created as unknown as Record<string, unknown>),
-          amount: Number(created.emiAmount),
-        });
+        if (sourceType) {
+          const monthRow = await createMonthPaymentForNewItem(
+            userId,
+            itemMonth,
+            itemYear,
+            sourceType,
+            created.id,
+            emiAmount,
+            payableAmount,
+            paymentStatus
+          );
+          await syncPlanItemCreateLedger(userId, "loan", {
+            id: monthRow.id,
+            amount: emiAmount,
+            payableAmount,
+            paymentStatus,
+            name,
+          });
+        }
         return created;
       }
       case "home": {
@@ -1184,18 +1208,36 @@ export async function createPlanItem(
             userId,
             name,
             amount,
-            payableAmount,
-            paymentStatus,
+            payableAmount: 0,
+            paymentStatus: "PENDING",
             dueDay: Number(data.dueDay) || 1,
             category: "HOME",
-            isPayable: payableAmount > 0,
+            isPayable: true,
           },
         });
-        await syncPlanItemCreateLedger(userId, "home", created as unknown as Record<string, unknown>);
+        if (sourceType) {
+          const monthRow = await createMonthPaymentForNewItem(
+            userId,
+            itemMonth,
+            itemYear,
+            sourceType,
+            created.id,
+            amount,
+            payableAmount,
+            paymentStatus
+          );
+          await syncPlanItemCreateLedger(userId, "home", {
+            id: monthRow.id,
+            amount,
+            payableAmount,
+            paymentStatus,
+            name,
+          });
+        }
         return created;
       }
-      case "monthly_fixed":
-        return prisma.fixedExpense.create({
+      case "monthly_fixed": {
+        const created = await prisma.fixedExpense.create({
           data: {
             userId,
             name,
@@ -1206,10 +1248,22 @@ export async function createPlanItem(
             isPayable: false,
           },
         });
+        if (sourceType) {
+          await createMonthPaymentForNewItem(
+            userId,
+            itemMonth,
+            itemYear,
+            sourceType,
+            created.id,
+            amount,
+            0,
+            "PAID"
+          );
+        }
+        return created;
+      }
       case "income": {
-        const date = new Date();
-        const month = Number(data.month) || date.getMonth() + 1;
-        const year = Number(data.year) || date.getFullYear();
+        const date = new Date(itemYear, itemMonth - 1, 1);
         const created = await prisma.income.create({
           data: {
             userId,
@@ -1217,8 +1271,8 @@ export async function createPlanItem(
             amount,
             incomeType: (data.incomeType as "SALARY" | "OTHER") || "OTHER",
             isReceived: data.isReceived !== undefined ? Boolean(data.isReceived) : false,
-            month,
-            year,
+            month: itemMonth,
+            year: itemYear,
             date,
           },
         });
@@ -1231,13 +1285,31 @@ export async function createPlanItem(
             userId,
             name,
             amount,
-            payableAmount,
-            paymentStatus,
+            payableAmount: 0,
+            paymentStatus: "PENDING",
             renewalDay: Number(data.renewalDay) || 1,
             isActive: true,
           },
         });
-        await syncPlanItemCreateLedger(userId, "subscription", created as unknown as Record<string, unknown>);
+        if (sourceType) {
+          const monthRow = await createMonthPaymentForNewItem(
+            userId,
+            itemMonth,
+            itemYear,
+            sourceType,
+            created.id,
+            amount,
+            payableAmount,
+            paymentStatus
+          );
+          await syncPlanItemCreateLedger(userId, "subscription", {
+            id: monthRow.id,
+            amount,
+            payableAmount,
+            paymentStatus,
+            name,
+          });
+        }
         return created;
       }
       case "insurance": {
@@ -1246,18 +1318,33 @@ export async function createPlanItem(
             userId,
             name,
             premium: amount,
-            payableAmount,
-            paymentStatus,
+            payableAmount: 0,
+            paymentStatus: "PENDING",
             renewalDay: Number(data.renewalDay) || 1,
             insuranceType: (data.insuranceType as "MEDICAL" | "OTHER") || "MEDICAL",
             cycle: "MONTHLY",
             isActive: true,
           },
         });
-        await syncPlanItemCreateLedger(userId, "insurance", {
-          ...(created as unknown as Record<string, unknown>),
-          amount: Number(created.premium),
-        });
+        if (sourceType) {
+          const monthRow = await createMonthPaymentForNewItem(
+            userId,
+            itemMonth,
+            itemYear,
+            sourceType,
+            created.id,
+            amount,
+            payableAmount,
+            paymentStatus
+          );
+          await syncPlanItemCreateLedger(userId, "insurance", {
+            id: monthRow.id,
+            amount,
+            payableAmount,
+            paymentStatus,
+            name,
+          });
+        }
         return created;
       }
       default:
@@ -1270,6 +1357,8 @@ export async function createPlanItem(
 
 export async function deletePlanItem(
   userId: string,
+  month: number,
+  year: number,
   type: PlanItemType,
   id: string
 ) {
@@ -1286,7 +1375,25 @@ export async function deletePlanItem(
   const model = modelMap[type];
   if (!model) throw new Error(`Cannot delete item type: ${type}`);
 
-  await syncPlanItemDeleteLedger(userId, type, id);
+  const sourceType = planItemTypeToSourceType(type);
+  if (sourceType) {
+    const monthRow = await prisma.planMonthPayment.findUnique({
+      where: {
+        userId_month_year_sourceType_sourceId: {
+          userId,
+          month,
+          year,
+          sourceType,
+          sourceId: id,
+        },
+      },
+    });
+    if (monthRow) {
+      await syncPlanItemDeleteLedger(userId, type, monthRow.id, "plan_month");
+    }
+  } else {
+    await syncPlanItemDeleteLedger(userId, type, id);
+  }
 
   const deleted = await deleteForUser(model, userId, id);
   if (!deleted && type === "saving") {
@@ -1295,6 +1402,8 @@ export async function deletePlanItem(
     return { success: true };
   }
   if (!deleted) throw new Error("Item not found");
+
+  await deleteMonthPaymentsForSource(userId, id);
   return { success: true };
 }
 
@@ -1337,11 +1446,38 @@ export async function copyPlanFromPreviousMonth(userId: string, month: number, y
     carryForward: prev.carryForward,
   };
 
-  return prisma.budget.upsert({
+  const budget = await prisma.budget.upsert({
     where: { userId_year_month: { userId, year, month } },
     create: { userId, month, year, ...rest },
     update: rest,
   });
+
+  await copyIncomeToMonth(userId, prevMonth, prevYear, month, year);
+  await resetMonthPlanPayments(userId, month, year);
+  await ensureMonthSavingsPlan(userId, month, year, {
+    force: true,
+    fromMonth: prevMonth,
+    fromYear: prevYear,
+  });
+
+  return budget;
+}
+
+export async function initializeMonthPlan(userId: string, month: number, year: number) {
+  let prevMonth = month - 1;
+  let prevYear = year;
+  if (prevMonth <= 0) {
+    prevMonth = 12;
+    prevYear -= 1;
+  }
+
+  await resetMonthPlanPayments(userId, month, year);
+  await ensureMonthSavingsPlan(userId, month, year, {
+    force: true,
+    fromMonth: prevMonth,
+    fromYear: prevYear,
+  });
+  return { success: true };
 }
 
 export { MONTHS, monthLabel };
